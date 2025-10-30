@@ -17,15 +17,14 @@ import {
   Redo,
   Maximize2,
   MousePointer,
-  ZoomIn,
-  ZoomOut,
   FileText,
   Download,
   Trash2,
   ChevronDown,
-  Palette,
-  Settings,
-  Home
+  Home,
+  Users,
+  UserPlus,
+  X
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -93,6 +92,10 @@ export default function Whiteboard() {
   const [selectedElement, setSelectedElement] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
+  const [showCollabModal, setShowCollabModal] = useState(false);
+  const [collaboratorEmail, setCollaboratorEmail] = useState('');
+  const [collaborators, setCollaborators] = useState<any[]>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     if (id && user) {
@@ -627,8 +630,119 @@ export default function Whiteboard() {
     setCustomColor(newColor);
   };
 
+  const loadCollaborators = async () => {
+    if (!id) return;
+    try {
+      const { data, error } = await supabase
+        .from('whiteboard_collaborators')
+        .select('user_id, profiles(username, full_name, avatar_url)')
+        .eq('whiteboard_id', id);
+      if (error) throw error;
+      setCollaborators(data || []);
+    } catch (error) {
+      console.error('Error loading collaborators:', error);
+    }
+  };
+
+  const addCollaborator = async () => {
+    if (!id || !collaboratorEmail.trim()) return;
+    try {
+      const searchTerm = collaboratorEmail.trim();
+      
+      // Try to find user by username or email
+      // First try username
+      let { data: userData, error: userError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', searchTerm)
+        .single();
+      
+      // If not found by username, try to find by matching the username with email prefix
+      if (userError || !userData) {
+        const { data: allProfiles } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .ilike('username', `%${searchTerm}%`);
+        
+        if (allProfiles && allProfiles.length === 1) {
+          userData = allProfiles[0];
+        } else if (allProfiles && allProfiles.length > 1) {
+          alert('Multiple users found. Please be more specific.');
+          return;
+        } else {
+          alert('User not found. Try searching by their username.');
+          return;
+        }
+      }
+
+      const { error } = await supabase
+        .from('whiteboard_collaborators')
+        .insert({ whiteboard_id: id, user_id: userData.id });
+      
+      if (error) throw error;
+      setCollaboratorEmail('');
+      loadCollaborators();
+      alert('Collaborator added successfully!');
+    } catch (error: any) {
+      console.error('Error adding collaborator:', error);
+      alert(error.message || 'Failed to add collaborator');
+    }
+  };
+
+  const removeCollaborator = async (userId: string) => {
+    if (!id) return;
+    try {
+      const { error } = await supabase
+        .from('whiteboard_collaborators')
+        .delete()
+        .eq('whiteboard_id', id)
+        .eq('user_id', userId);
+      
+      if (error) throw error;
+      loadCollaborators();
+    } catch (error) {
+      console.error('Error removing collaborator:', error);
+    }
+  };
+
+  const deleteWhiteboard = async () => {
+    if (!id || !user) return;
+    try {
+      const { error } = await supabase
+        .from('whiteboards')
+        .delete()
+        .eq('id', id)
+        .eq('owner_id', user.id);
+      
+      if (error) throw error;
+      navigate('/dashboard');
+    } catch (error) {
+      console.error('Error deleting whiteboard:', error);
+      alert('Failed to delete whiteboard');
+    }
+  };
+
+  useEffect(() => {
+    if (id) loadCollaborators();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    const channel = supabase.channel(`whiteboard:${id}`);
+
+    channel
+      .on('broadcast', { event: 'draw' }, (payload) => {
+        setElements((prevElements) => [...prevElements, payload.payload]);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id]);
+
   return (
-    <div className={isFullscreen ? 'fixed inset-0 bg-slate-50 z-50 flex flex-col' : 'min-h-screen bg-slate-50 flex flex-col'}>
+    <div className={isFullscreen ? 'fixed inset-0 bg-background text-foreground z-50 flex flex-col' : 'min-h-screen bg-background text-foreground flex flex-col'}>
       <input
         ref={fileInputRef}
         type="file"
@@ -637,17 +751,23 @@ export default function Whiteboard() {
         className="hidden"
       />
 
-      <div className="bg-white border-b border-slate-200 shadow-sm">
+      <motion.div 
+        initial={{ y: -20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        className="bg-card/80 backdrop-blur-xl border-b border-border/50 shadow-lg"
+      >
         <div className="max-w-[1800px] mx-auto px-4 py-3">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => navigate('/dashboard')}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-2.5 hover:bg-gradient-to-br from-primary/20 to-primary/10 rounded-xl transition-all duration-300 group"
                 title="Back to Dashboard"
               >
-                <Home className="w-5 h-5 text-slate-600" />
-              </button>
+                <Home className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
+              </motion.button>
               {isEditingName ? (
                 <input
                   type="text"
@@ -655,122 +775,190 @@ export default function Whiteboard() {
                   onChange={(e) => setWhiteboardName(e.target.value)}
                   onBlur={() => setIsEditingName(false)}
                   onKeyDown={(e) => e.key === 'Enter' && setIsEditingName(false)}
-                  className="text-xl font-semibold px-2 py-1 border-2 border-blue-500 rounded-lg focus:outline-none"
+                  className="text-xl font-semibold px-2 py-1 border-2 border-primary rounded-xl focus:outline-none bg-background text-foreground"
                   autoFocus
                 />
               ) : (
-                <h1
+                <motion.h1
+                  whileHover={{ scale: 1.02 }}
                   onClick={() => setIsEditingName(true)}
-                  className="text-xl font-semibold text-slate-800 cursor-pointer hover:text-blue-600 transition-colors"
+                  className="text-xl font-bold bg-gradient-to-r from-primary via-primary/80 to-primary bg-clip-text text-transparent cursor-pointer transition-all duration-300"
                 >
                   {whiteboardName}
-                </h1>
+                </motion.h1>
               )}
-              {saving && <span className="text-xs text-slate-500 animate-pulse">Saving...</span>}
+              {saving && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full border border-primary/20"
+                >
+                  <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
+                  <span className="text-xs font-medium text-primary">Saving...</span>
+                </motion.div>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05, y: -2 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowCollabModal(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-primary/20 to-primary/10 hover:from-primary/30 hover:to-primary/20 rounded-xl transition-all duration-300 text-sm font-semibold text-primary border border-primary/20"
+                title="Manage Collaborators"
+              >
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">Collaborate</span>
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05, y: -2 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={handleDownload}
-                className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors text-sm font-medium text-slate-700"
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 rounded-xl transition-all duration-300 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20"
                 title="Download"
               >
                 <Download className="w-4 h-4" />
-              </button>
-              <button
+                <span className="hidden sm:inline">Export</span>
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05, y: -2 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={handleClear}
-                className="flex items-center gap-2 px-3 py-2 bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-sm font-medium text-red-600"
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl transition-all duration-300 text-sm font-semibold text-white shadow-lg shadow-orange-500/20"
                 title="Clear Canvas"
               >
                 <Trash2 className="w-4 h-4" />
-              </button>
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05, y: -2 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl transition-all duration-300 text-sm font-semibold text-white shadow-lg shadow-red-500/20"
+                title="Delete Whiteboard"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Delete</span>
+              </motion.button>
             </div>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
-              <button
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+            >
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('select')}
                 title="Select"
-                className={`p-2.5 rounded-lg transition-all ${tool === 'select' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'select' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
               >
                 <MousePointer className="w-4 h-4" />
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('pen')}
                 title="Pen"
-                className={`p-2.5 rounded-lg transition-all ${tool === 'pen' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'pen' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
               >
                 <Pen className="w-4 h-4" />
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('eraser')}
                 title="Eraser"
-                className={`p-2.5 rounded-lg transition-all ${tool === 'eraser' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'eraser' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
               >
                 <Eraser className="w-4 h-4" />
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('text')}
                 title="Text"
-                className={`p-2.5 rounded-lg transition-all ${tool === 'text' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'text' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
               >
                 <Type className="w-4 h-4" />
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('sticky')}
                 title="Sticky Note"
-                className={`p-2.5 rounded-lg transition-all ${tool === 'sticky' ? 'bg-white shadow-sm text-yellow-600' : 'text-slate-600 hover:bg-white/50'}`}
+                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'sticky' ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-500/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
               >
                 <FileText className="w-4 h-4" />
-              </button>
-            </div>
+              </motion.button>
+            </motion.div>
 
-            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+            >
               {SHAPES.slice(0, 4).map(({ tool: shapeTool, icon: Icon, label }) => (
-                <button
+                <motion.button
                   key={shapeTool}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={() => setTool(shapeTool)}
                   title={label}
-                  className={`p-2.5 rounded-lg transition-all ${tool === shapeTool ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                  className={`p-2.5 rounded-xl transition-all duration-300 ${tool === shapeTool ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
                 >
                   <Icon className="w-4 h-4" />
-                </button>
+                </motion.button>
               ))}
-            </div>
+            </motion.div>
 
-            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+            >
               {SHAPES.slice(4).map(({ tool: shapeTool, icon: Icon, label }) => (
-                <button
+                <motion.button
                   key={shapeTool}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={() => setTool(shapeTool)}
                   title={label}
-                  className={`p-2.5 rounded-lg transition-all ${tool === shapeTool ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                  className={`p-2.5 rounded-xl transition-all duration-300 ${tool === shapeTool ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
                 >
                   <Icon className="w-4 h-4" />
-                </button>
+                </motion.button>
               ))}
-            </div>
+            </motion.div>
 
-            <button
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => fileInputRef.current?.click()}
               title="Add Image"
-              className={`p-2.5 rounded-lg transition-all bg-slate-100 hover:bg-slate-200 ${tool === 'image' ? 'ring-2 ring-blue-500' : ''}`}
+              className={`p-2.5 rounded-xl transition-all duration-300 bg-accent/50 hover:bg-accent/70 ${tool === 'image' ? 'ring-2 ring-primary shadow-lg shadow-primary/30' : ''}`}
             >
-              <ImageIcon className="w-4 h-4 text-slate-600" />
-            </button>
+              <ImageIcon className="w-4 h-4 text-foreground/70" />
+            </motion.button>
 
-            <div className="h-8 w-px bg-slate-300" />
+            <div className="h-8 w-px bg-border/50" />
 
             <div className="relative">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setShowColorPicker(!showColorPicker)}
-                className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all"
+                className="flex items-center gap-2 px-4 py-2.5 bg-accent/50 hover:bg-accent/70 rounded-xl transition-all duration-300 shadow-md hover:shadow-lg hover:scale-105"
                 title="Color Picker"
               >
-                <div className="w-6 h-6 rounded-md border-2 border-slate-300 shadow-sm" style={{ backgroundColor: color }} />
-                <ChevronDown className="w-4 h-4 text-slate-600" />
-              </button>
+                <div className="w-6 h-6 rounded-lg border-2 border-border shadow-sm" style={{ backgroundColor: color }} />
+                <ChevronDown className="w-4 h-4 text-foreground/60" />
+              </motion.button>
 
               <AnimatePresence>
                 {showColorPicker && (
@@ -778,15 +966,15 @@ export default function Whiteboard() {
                     initial={{ opacity: 0, y: -10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                    className="absolute top-full mt-2 left-0 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 z-50 w-72"
+                    className="absolute top-full mt-2 left-0 bg-card/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-border/50 p-5 z-50 w-72"
                   >
                     <div className="mb-3">
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Preset Colors</label>
+                      <label className="block text-xs font-semibold text-foreground/80 mb-2">Preset Colors</label>
                       <div className="grid grid-cols-6 gap-2">
                         {PRESET_COLORS.map(col => (
                           <button
                             key={col}
-                            className={`w-10 h-10 rounded-lg border-2 transition-all hover:scale-110 ${color === col ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-300'}`}
+                            className={`w-10 h-10 rounded-xl border-2 transition-all duration-300 hover:scale-125 hover:rotate-6 ${color === col ? 'border-primary ring-4 ring-primary/50 scale-110' : 'border-border/50 hover:border-primary/50'}`}
                             style={{ backgroundColor: col }}
                             onClick={() => {
                               handleColorChange(col);
@@ -798,14 +986,14 @@ export default function Whiteboard() {
                       </div>
                     </div>
 
-                    <div className="border-t border-slate-200 pt-3">
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Custom Color</label>
+                    <div className="border-t border-border pt-3">
+                      <label className="block text-xs font-semibold text-foreground/80 mb-2">Custom Color</label>
                       <div className="flex gap-2">
                         <input
                           type="color"
                           value={customColor}
                           onChange={(e) => setCustomColor(e.target.value)}
-                          className="w-12 h-12 rounded-lg cursor-pointer border-2 border-slate-300"
+                          className="w-12 h-12 rounded-xl cursor-pointer border-2 border-border"
                         />
                         <input
                           type="text"
@@ -817,14 +1005,14 @@ export default function Whiteboard() {
                             }
                           }}
                           placeholder="#000000"
-                          className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
+                          className="flex-1 px-3 py-2 border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none text-sm bg-background text-foreground"
                         />
                         <button
                           onClick={() => {
                             handleColorChange(customColor);
                             setShowColorPicker(false);
                           }}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm transition-colors"
+                          className="px-4 py-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg shadow-primary/30 hover:scale-105"
                         >
                           Apply
                         </button>
@@ -836,17 +1024,19 @@ export default function Whiteboard() {
             </div>
 
             <div className="relative">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => setShowStrokeMenu(!showStrokeMenu)}
-                className="flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all"
+                className="flex items-center gap-2 px-4 py-2.5 bg-accent/50 hover:bg-accent/70 rounded-xl transition-all duration-300 shadow-md hover:shadow-lg hover:scale-105"
                 title="Stroke Width"
               >
                 <div className="flex items-center gap-2">
-                  <div className="w-6 h-1 rounded-full bg-slate-700" style={{ height: `${strokeWidth}px` }} />
-                  <span className="text-sm font-medium text-slate-700">{strokeWidth}px</span>
+                  <div className="w-6 h-1 rounded-full bg-foreground/80" style={{ height: `${strokeWidth}px` }} />
+                  <span className="text-sm font-medium text-foreground/80">{strokeWidth}px</span>
                 </div>
-                <ChevronDown className="w-4 h-4 text-slate-600" />
-              </button>
+                <ChevronDown className="w-4 h-4 text-foreground/60" />
+              </motion.button>
 
               <AnimatePresence>
                 {showStrokeMenu && (
@@ -854,16 +1044,16 @@ export default function Whiteboard() {
                     initial={{ opacity: 0, y: -10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                    className="absolute top-full mt-2 left-0 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 z-50 w-64"
+                    className="absolute top-full mt-2 left-0 bg-card/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-border/50 p-5 z-50 w-64"
                   >
-                    <label className="block text-xs font-semibold text-slate-700 mb-3">Stroke Width</label>
+                    <label className="block text-xs font-semibold text-foreground/80 mb-3">Stroke Width</label>
                     <input
                       type="range"
                       min="1"
                       max="50"
                       value={strokeWidth}
                       onChange={(e) => setStrokeWidth(Number(e.target.value))}
-                      className="w-full accent-blue-600"
+                      className="w-full accent-primary"
                     />
                     <div className="flex items-center justify-between gap-2 mt-3">
                       {[1, 3, 5, 10, 20].map(size => (
@@ -873,10 +1063,10 @@ export default function Whiteboard() {
                             setStrokeWidth(size);
                             setShowStrokeMenu(false);
                           }}
-                          className={`flex-1 py-2 rounded-lg border-2 transition-all ${strokeWidth === size ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}
+                          className={`flex-1 py-2 rounded-xl border-2 transition-all duration-300 ${strokeWidth === size ? 'border-primary bg-primary/10 scale-105 shadow-lg shadow-primary/20' : 'border-border/50 hover:border-primary/50 hover:scale-105'}`}
                         >
                           <div className="w-full flex justify-center">
-                            <div className="rounded-full bg-slate-700" style={{ width: `${size * 2}px`, height: `${size}px` }} />
+                            <div className="rounded-full bg-foreground/80" style={{ width: `${size * 2}px`, height: `${size}px` }} />
                           </div>
                         </button>
                       ))}
@@ -886,39 +1076,56 @@ export default function Whiteboard() {
               </AnimatePresence>
             </div>
 
-            <div className="h-8 w-px bg-slate-300" />
+            <div className="h-8 w-px bg-border/50" />
 
-            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
-              <button
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.25 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+            >
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={handleUndo}
                 disabled={historyStep === 0}
                 title="Undo"
-                className="p-2.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed text-slate-600 hover:bg-white/50 hover:text-blue-600"
+                className="p-2.5 rounded-xl transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed text-foreground/60 hover:bg-background/70 hover:text-primary hover:scale-105"
               >
                 <Undo className="w-4 h-4" />
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={handleRedo}
                 disabled={historyStep >= history.length - 1}
                 title="Redo"
-                className="p-2.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed text-slate-600 hover:bg-white/50 hover:text-blue-600"
+                className="p-2.5 rounded-xl transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed text-foreground/60 hover:bg-background/70 hover:text-primary hover:scale-105"
               >
                 <Redo className="w-4 h-4" />
-              </button>
-            </div>
+              </motion.button>
+            </motion.div>
 
-            <button
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={handleFullscreen}
               title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-              className={`p-2.5 rounded-lg transition-all ${isFullscreen ? 'bg-blue-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
+              className={`p-2.5 rounded-xl transition-all duration-300 ${isFullscreen ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30' : 'bg-accent/50 hover:bg-accent/70 text-foreground/70'}`}
             >
               <Maximize2 className="w-4 h-4" />
-            </button>
+            </motion.button>
           </div>
         </div>
-      </div>
+      </motion.div>
 
-      <div ref={containerRef} className="flex-1 relative overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100">
+      <motion.div 
+        ref={containerRef}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.2 }}
+        className="flex-1 relative overflow-hidden bg-gradient-to-br from-background via-background to-background/95"
+      >
         <canvas
           ref={canvasRef}
           width={1920}
@@ -927,10 +1134,149 @@ export default function Whiteboard() {
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          className="absolute inset-0 m-auto cursor-crosshair shadow-2xl rounded-lg"
+          className="absolute inset-0 m-auto cursor-crosshair"
           style={{ maxWidth: '100%', maxHeight: '100%' }}
         />
-      </div>
+      </motion.div>
+
+      {/* Collaboration Modal */}
+      <AnimatePresence>
+        {showCollabModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setShowCollabModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-card border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-2xl font-bold text-foreground">Manage Collaborators</h2>
+                <button
+                  onClick={() => setShowCollabModal(false)}
+                  className="p-2 hover:bg-accent rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-foreground/80 mb-2">
+                    Add Collaborator by Email
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      value={collaboratorEmail}
+                      onChange={(e) => setCollaboratorEmail(e.target.value)}
+                      placeholder="user@example.com"
+                      className="flex-1 px-4 py-2 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none text-foreground"
+                    />
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={addCollaborator}
+                      className="px-4 py-2 bg-primary text-primary-foreground rounded-xl font-semibold hover:bg-primary/90 transition-colors flex items-center gap-2"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      Add
+                    </motion.button>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-medium text-foreground/80 mb-2">Current Collaborators</h3>
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {collaborators.length === 0 ? (
+                      <p className="text-sm text-foreground/50 text-center py-4">No collaborators yet</p>
+                    ) : (
+                      collaborators.map((collab: any) => (
+                        <div
+                          key={collab.user_id}
+                          className="flex items-center justify-between p-3 bg-accent/50 rounded-xl"
+                        >
+                          <div className="flex items-center gap-2">
+                            {collab.profiles?.avatar_url && (
+                              <img 
+                                src={collab.profiles.avatar_url} 
+                                alt="Avatar" 
+                                className="w-8 h-8 rounded-full"
+                              />
+                            )}
+                            <div>
+                              <p className="font-medium text-foreground">
+                                {collab.profiles?.full_name || collab.profiles?.username || 'Unknown User'}
+                              </p>
+                              <p className="text-sm text-foreground/60">@{collab.profiles?.username || 'no-username'}</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => removeCollaborator(collab.user_id)}
+                            className="p-2 hover:bg-red-500/20 text-red-500 rounded-lg transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setShowDeleteConfirm(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-card border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            >
+              <h2 className="text-2xl font-bold text-foreground mb-4">Delete Whiteboard?</h2>
+              <p className="text-foreground/70 mb-6">
+                Are you sure you want to delete "{whiteboardName}"? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 px-4 py-2.5 bg-accent hover:bg-accent/80 text-foreground rounded-xl font-semibold transition-colors"
+                >
+                  Cancel
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={deleteWhiteboard}
+                  className="flex-1 px-4 py-2.5 bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-xl font-semibold transition-colors shadow-lg shadow-red-500/20"
+                >
+                  Delete
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

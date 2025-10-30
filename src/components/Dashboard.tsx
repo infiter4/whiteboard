@@ -34,18 +34,26 @@ export default function Dashboard() {
   }, [activeTab, user]);
 
   useEffect(() => {
-    if (!user) return;
-    setProfileLoading(true);
-    supabase
-      .from('profiles')
-      .select('username')
-      .eq('id', user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        setProfileUsername(data?.username || null);
-      })
-      ;
-    setProfileLoading(false);
+    const loadProfile = async () => {
+      if (!user) return;
+      setProfileLoading(true);
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('username, full_name')
+          .eq('id', user.id)
+          .maybeSingle();
+        
+        // Prefer full_name for Google users, fallback to username or email
+        setProfileUsername(data?.full_name || data?.username || user.email?.split('@')[0] || null);
+      } catch (error) {
+        console.error('Error loading profile:', error);
+      } finally {
+        setProfileLoading(false);
+      }
+    };
+    
+    loadProfile();
   }, [user]);
 
   // Fetches all whiteboards owned by user or where user is a collaborator

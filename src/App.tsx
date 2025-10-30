@@ -6,8 +6,17 @@ import Dashboard from './components/Dashboard';
 import Whiteboard from './components/Whiteboard';
 import ProtectedRoute from './components/ProtectedRoute';
 
+// This component consumes the auth context
 function AppRoutes() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <Routes>
@@ -40,26 +49,13 @@ function AppRoutes() {
   );
 }
 
-function AppContent() {
-  const { loading } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  return <AppRoutes />;
-}
-
+// This is the main App component
 function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <ThemeProvider>
-          <AppContent />
+          <AppRoutes />
         </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
