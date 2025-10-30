@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import {
-  Pen, Eraser, Type, Image as ImageIcon, Square, Circle, ArrowRight, Minus, Star, Triangle, Hexagon, Pentagon, Undo, Redo, Maximize2, Select, StickyNote, ZoomIn, ZoomOut
+  Pen, Eraser, Type, Image as ImageIcon, Square, Circle, ArrowRight, Minus, Star, Triangle, Hexagon, Pentagon, Undo, Redo, Maximize2, MousePointer, StickyNote, ZoomIn, ZoomOut
 } from 'lucide-react';
 
 const COLORS = [
@@ -83,7 +83,7 @@ export default function Whiteboard() {
     <div className={isFullscreen ? 'fixed inset-0 bg-white z-50 flex flex-col' : 'min-h-screen bg-white flex flex-col'}>
       {/* --- Top toolbar --- */}
       <div className="flex w-full py-3 px-6  items-center gap-3 bg-slate-50 border-b border-slate-300 shadow-md sticky top-0 z-40">
-        <button onClick={() => setTool('select')} title="Select Pointer" className={`rounded p-2 mx-1 ${tool==='select'?'bg-blue-200':''}`}><Select /></button>
+        <button onClick={() => setTool('select')} title="Select Pointer" className={`rounded p-2 mx-1 ${tool==='select'?'bg-blue-200':''}`}><MousePointer /></button>
         <div className="flex gap-1">
           <button onClick={() => setTool('pen')} title="Pen" className={`rounded p-2 ${tool==='pen'?'bg-blue-200':''}`}><Pen /></button>
           <button onClick={() => setTool('highlighter')} title="Highlighter" className={`rounded p-2 ${tool==='highlighter'?'bg-yellow-100':''}`}><Type /></button>
