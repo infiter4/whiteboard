@@ -1,0 +1,69 @@
+:root.light {
+  --background: #111111;
+  --foreground: #F8F8F8;
+  --primary: #4F46E5;
+  --primary-foreground: #FFFFFF;
+  --secondary: #374151;
+  --secondary-foreground: #F8F8F8;
+  --accent: #1F2937;
+  --accent-foreground: #F8F8F8;
+  --border: #374151;
+  --card: #1F2937;
+  --card-foreground: #F8F8F8;
+}
+
+:root.dark {
+  --background: #1a1a1a;
+  --foreground: #ffffff;
+  --primary: #007bff;
+  --primary-foreground: #ffffff;
+  --secondary: #343a40;
+  --secondary-foreground: #ffffff;
+  --accent: #2c2c2c;
+  --accent-foreground: #ffffff;
+  --border: #495057;
+  --card: #2c2c2c;
+  --card-foreground: #ffffff;
+}
+
+:root.ocean {
+  --background: #0d1b2a;
+  --foreground: #e0e1dd;
+  --primary: #3a86ff;
+  --primary-foreground: #ffffff;
+  --secondary: #1b263b;
+  --secondary-foreground: #e0e1dd;
+  --accent: #415a77;
+  --accent-foreground: #ffffff;
+  --border: #1b263b;
+  --card: #1b263b;
+  --card-foreground: #e0e1dd;
+}
+
+:root.nebula {
+  --background: #191226;
+  --foreground: #e6ddeb;
+  --primary: #9b59b6;
+  --primary-foreground: #ffffff;
+  --secondary: #231933;
+  --secondary-foreground: #e6ddeb;
+  --accent: #8e44ad;
+  --accent-foreground: #ffffff;
+  --border: #2c213e;
+  --card: #231933;
+  --card-foreground: #e6ddeb;
+}
+
+:root.forest {
+  --background: #1a2e28;
+  --foreground: #d8e2dc;
+  --primary: #4a7c59;
+  --primary-foreground: #ffffff;
+  --secondary: #2d4036;
+  --secondary-foreground: #d8e2dc;
+  --accent: #6a994e;
+  --accent-foreground: #ffffff;
+  --border: #3a5a40;
+  --card: #2d4036;
+  --card-foreground: #d8e2dc;
+}

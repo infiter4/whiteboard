@@ -5,12 +5,9 @@ import {
   Grid3x3,
   List,
   Search,
-  LogOut,
   User,
   FileText,
   Layout,
-  Folder,
-  Settings,
   Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,6 +15,7 @@ import { supabase, Whiteboard, Note } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Transition } from '@headlessui/react';
 import React from 'react';
+import ThemeSwitcher from './ThemeSwitcher';
 
 export default function Dashboard() {
   const { user, signOut } = useAuth();
@@ -46,7 +44,8 @@ export default function Dashboard() {
       .then(({ data }) => {
         setProfileUsername(data?.username || null);
       })
-      .finally(() => setProfileLoading(false));
+      ;
+    setProfileLoading(false);
   }, [user]);
 
   // Fetches all whiteboards owned by user or where user is a collaborator
@@ -168,21 +167,30 @@ export default function Dashboard() {
   const items = activeTab === 'whiteboards' ? filteredWhiteboards : filteredNotes;
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <nav className="bg-white border-b border-slate-200 sticky top-0 z-40">
+    <div className="min-h-screen bg-background">
+      <nav className="bg-card/80 backdrop-blur-xl border-b border-border sticky top-0 z-40 shadow-lg">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-blue-400 rounded-lg flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-bold text-slate-800">WhiteboardAI</span>
-          </div>
+          <motion.div 
+            className="flex items-center gap-3"
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+          >
+            <motion.div 
+              className="w-10 h-10 bg-gradient-to-br from-blue-600 via-purple-600 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30"
+              whileHover={{ scale: 1.1, rotate: 5 }}
+              transition={{ type: "spring", stiffness: 400 }}
+            >
+              <Sparkles className="w-6 h-6 text-white" />
+            </motion.div>
+            <span className="text-2xl font-black bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">WhiteboardAI</span>
+          </motion.div>
 
           <div className="flex items-center gap-4">
+            <ThemeSwitcher />
             <Menu as="div" className="relative inline-block text-left">
-              <Menu.Button className="flex items-center gap-2 px-3 py-2 bg-slate-100 rounded-lg hover:bg-slate-200 transition">
-                <User className="w-4 h-4 text-slate-600" />
-                <span className="text-sm font-semibold text-slate-800">
+              <Menu.Button className="flex items-center gap-2 px-3 py-2 bg-accent rounded-lg hover:bg-accent/80 transition">
+                <User className="w-4 h-4 text-secondary-foreground" />
+                <span className="text-sm font-semibold text-foreground">
                   {profileLoading
                     ? '...'
                     : profileUsername || user?.email}
@@ -197,13 +205,13 @@ export default function Dashboard() {
                 leaveFrom="transform opacity-100 scale-100"
                 leaveTo="transform opacity-0 scale-95"
               >
-                <Menu.Items className="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black/5 focus:outline-none p-2">
+                <Menu.Items className="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-md bg-card shadow-lg ring-1 ring-black/5 focus:outline-none p-2">
                   <div className="px-3 py-2">
-                    <div className="font-semibold text-base text-slate-800">{user?.user_metadata?.username || user?.email}</div>
-                    {user?.user_metadata?.username && <div className="text-xs text-slate-500 mt-1">{user?.email}</div>}
+                    <div className="font-semibold text-base text-foreground">{user?.user_metadata?.username || user?.email}</div>
+                    {user?.user_metadata?.username && <div className="text-xs text-secondary-foreground/80 mt-1">{user?.email}</div>}
                   </div>
                   <button
-                    className="w-full text-left mt-2 px-4 py-2 rounded bg-red-500 text-white hover:bg-red-600 transition font-semibold text-sm"
+                    className="w-full text-left mt-2 px-4 py-2 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition font-semibold text-sm"
                     onClick={handleSignOut}
                   >
                     Logout
@@ -218,29 +226,32 @@ export default function Dashboard() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-4xl font-bold text-slate-900 mb-2">My Workspace</h1>
-            <p className="text-slate-600">Create, organize, and collaborate</p>
+            <h1 className="text-4xl font-bold text-foreground mb-2">My Workspace</h1>
+            <p className="text-secondary-foreground">Create, organize, and collaborate</p>
           </div>
           <motion.button
-            whileHover={{ scale: 1.05 }}
+            whileHover={{ scale: 1.05, y: -2 }}
             whileTap={{ scale: 0.95 }}
             onClick={activeTab === 'whiteboards' ? createWhiteboard : createNote}
-            className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-600/30 transition-all"
+            className="group flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-blue-600 via-purple-600 to-cyan-500 hover:from-blue-700 hover:via-purple-700 hover:to-cyan-600 text-white rounded-2xl font-bold shadow-2xl shadow-blue-500/30 hover:shadow-purple-500/50 transition-all relative overflow-hidden"
           >
-            <Plus className="w-5 h-5" />
-            New {activeTab === 'whiteboards' ? 'Whiteboard' : 'Note'}
+            <span className="relative z-10 flex items-center gap-2">
+              <Plus className="w-5 h-5" />
+              New {activeTab === 'whiteboards' ? 'Whiteboard' : 'Note'}
+            </span>
+            <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 group-hover:translate-x-full transition-transform duration-1000"></div>
           </motion.button>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-6">
-          <div className="flex items-center justify-between p-4 border-b border-slate-200">
+        <div className="bg-card rounded-xl border border-border shadow-sm mb-6">
+          <div className="flex items-center justify-between p-4 border-b border-border">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setActiveTab('whiteboards')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                   activeTab === 'whiteboards'
-                    ? 'bg-blue-50 text-blue-600'
-                    : 'text-slate-600 hover:bg-slate-50'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-secondary-foreground hover:bg-background'
                 }`}
               >
                 <Layout className="w-4 h-4" />
@@ -250,8 +261,8 @@ export default function Dashboard() {
                 onClick={() => setActiveTab('notes')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                   activeTab === 'notes'
-                    ? 'bg-blue-50 text-blue-600'
-                    : 'text-slate-600 hover:bg-slate-50'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-secondary-foreground hover:bg-background'
                 }`}
               >
                 <FileText className="w-4 h-4" />
@@ -261,31 +272,31 @@ export default function Dashboard() {
 
             <div className="flex items-center gap-3">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary-foreground/50" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search..."
-                  className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all w-64"
+                  className="pl-9 pr-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all w-64"
                 />
               </div>
-              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+              <div className="flex items-center gap-1 p-1 bg-accent rounded-lg">
                 <button
                   onClick={() => setViewMode('grid')}
                   className={`p-2 rounded transition-all ${
-                    viewMode === 'grid' ? 'bg-white shadow-sm' : 'hover:bg-slate-200'
+                    viewMode === 'grid' ? 'bg-card shadow-sm' : 'hover:bg-accent/80'
                   }`}
                 >
-                  <Grid3x3 className="w-4 h-4 text-slate-600" />
+                  <Grid3x3 className="w-4 h-4 text-secondary-foreground" />
                 </button>
                 <button
                   onClick={() => setViewMode('list')}
                   className={`p-2 rounded transition-all ${
-                    viewMode === 'list' ? 'bg-white shadow-sm' : 'hover:bg-slate-200'
+                    viewMode === 'list' ? 'bg-card shadow-sm' : 'hover:bg-accent/80'
                   }`}
                 >
-                  <List className="w-4 h-4 text-slate-600" />
+                  <List className="w-4 h-4 text-secondary-foreground" />
                 </button>
               </div>
             </div>
@@ -293,26 +304,26 @@ export default function Dashboard() {
 
           <div className="p-6">
             {loading ? (
-              <div className="text-center py-12 text-slate-500">Loading...</div>
+              <div className="text-center py-12 text-secondary-foreground/80">Loading...</div>
             ) : items.length === 0 ? (
               <div className="text-center py-12">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <div className="w-16 h-16 bg-accent rounded-full flex items-center justify-center mx-auto mb-4">
                   {activeTab === 'whiteboards' ? (
-                    <Layout className="w-8 h-8 text-slate-400" />
+                    <Layout className="w-8 h-8 text-secondary-foreground/50" />
                   ) : (
-                    <FileText className="w-8 h-8 text-slate-400" />
+                    <FileText className="w-8 h-8 text-secondary-foreground/50" />
                   )}
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-2">
+                <h3 className="text-lg font-semibold text-foreground mb-2">
                   No {activeTab} yet
                 </h3>
-                <p className="text-slate-600 mb-6">
+                <p className="text-secondary-foreground mb-6">
                   Create your first {activeTab === 'whiteboards' ? 'whiteboard' : 'note'} to get
                   started
                 </p>
                 <button
                   onClick={activeTab === 'whiteboards' ? createWhiteboard : createNote}
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-all"
+                  className="inline-flex items-center gap-2 px-6 py-3 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg font-semibold transition-all"
                 >
                   <Plus className="w-5 h-5" />
                   Create {activeTab === 'whiteboards' ? 'Whiteboard' : 'Note'}
@@ -323,28 +334,48 @@ export default function Dashboard() {
                 {items.map((item) => (
                   <motion.div
                     key={item.id}
-                    whileHover={{ y: -4 }}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    whileHover={{ y: -8, scale: 1.02 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
                     onClick={() =>
                       navigate(
                         activeTab === 'whiteboards' ? `/whiteboard/${item.id}` : `/note/${item.id}`
                       )
                     }
-                    className="bg-white border border-slate-200 rounded-xl overflow-hidden cursor-pointer hover:shadow-lg transition-all group"
+                    className="group relative cursor-pointer"
                   >
-                    <div className="aspect-video bg-slate-100 flex items-center justify-center">
-                      {activeTab === 'whiteboards' ? (
-                        <Layout className="w-12 h-12 text-slate-300" />
-                      ) : (
-                        <FileText className="w-12 h-12 text-slate-300" />
-                      )}
-                    </div>
-                    <div className="p-4">
-                      <h3 className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors truncate">
-                        {'name' in item ? item.name : item.title}
-                      </h3>
-                      <p className="text-sm text-slate-500 mt-1">
-                        {new Date(item.updated_at).toLocaleDateString()}
-                      </p>
+                    <div className="absolute inset-0 bg-gradient-to-r from-primary/10 via-purple-500/10 to-cyan-500/10 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                    <div className="relative bg-card/80 backdrop-blur-sm border border-border rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300">
+                      <div className="aspect-video bg-gradient-to-br from-accent via-accent/50 to-accent flex items-center justify-center relative overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-purple-500/5 to-cyan-500/5"></div>
+                        <motion.div
+                          whileHover={{ scale: 1.2, rotate: 5 }}
+                          transition={{ type: "spring", stiffness: 400 }}
+                        >
+                          {activeTab === 'whiteboards' ? (
+                            <Layout className="w-16 h-16 text-primary/40 relative z-10" />
+                          ) : (
+                            <FileText className="w-16 h-16 text-primary/40 relative z-10" />
+                          )}
+                        </motion.div>
+                      </div>
+                      <div className="p-5">
+                        <h3 className="font-bold text-lg text-foreground group-hover:text-primary transition-colors truncate mb-2">
+                          {'name' in item ? item.name : item.title}
+                        </h3>
+                        <p className="text-sm text-secondary-foreground/80 flex items-center gap-2">
+                          <span className="w-2 h-2 bg-primary rounded-full"></span>
+                          {new Date(item.updated_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <motion.div
+                        className="absolute bottom-0 left-0 h-1 bg-gradient-to-r from-primary via-purple-500 to-cyan-500"
+                        initial={{ width: 0 }}
+                        whileInView={{ width: "100%" }}
+                        viewport={{ once: true }}
+                        transition={{ duration: 0.8 }}
+                      ></motion.div>
                     </div>
                   </motion.div>
                 ))}
@@ -354,28 +385,46 @@ export default function Dashboard() {
                 {items.map((item) => (
                   <motion.div
                     key={item.id}
-                    whileHover={{ x: 4 }}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    whileHover={{ x: 8, scale: 1.01 }}
+                    transition={{ type: "spring", stiffness: 300 }}
                     onClick={() =>
                       navigate(
                         activeTab === 'whiteboards' ? `/whiteboard/${item.id}` : `/note/${item.id}`
                       )
                     }
-                    className="flex items-center gap-4 p-4 bg-white border border-slate-200 rounded-lg cursor-pointer hover:border-blue-300 hover:shadow-md transition-all group"
+                    className="group relative"
                   >
-                    <div className="w-12 h-12 bg-slate-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                      {activeTab === 'whiteboards' ? (
-                        <Layout className="w-6 h-6 text-slate-400" />
-                      ) : (
-                        <FileText className="w-6 h-6 text-slate-400" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors truncate">
-                        {'name' in item ? item.name : item.title}
-                      </h3>
-                      <p className="text-sm text-slate-500">
-                        Updated {new Date(item.updated_at).toLocaleDateString()}
-                      </p>
+                    <div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-purple-500/5 rounded-xl blur opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    <div className="relative flex items-center gap-5 p-5 bg-card/80 backdrop-blur-sm border border-border rounded-xl cursor-pointer hover:border-primary/50 hover:shadow-xl transition-all">
+                      <motion.div 
+                        className="w-14 h-14 bg-gradient-to-br from-primary/20 via-purple-500/20 to-cyan-500/20 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg"
+                        whileHover={{ rotate: 5, scale: 1.1 }}
+                        transition={{ type: "spring", stiffness: 400 }}
+                      >
+                        {activeTab === 'whiteboards' ? (
+                          <Layout className="w-7 h-7 text-primary" />
+                        ) : (
+                          <FileText className="w-7 h-7 text-primary" />
+                        )}
+                      </motion.div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-bold text-lg text-foreground group-hover:text-primary transition-colors truncate mb-1">
+                          {'name' in item ? item.name : item.title}
+                        </h3>
+                        <p className="text-sm text-secondary-foreground/80 flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
+                          Updated {new Date(item.updated_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <motion.div
+                        className="text-primary opacity-0 group-hover:opacity-100 transition-opacity"
+                        animate={{ x: [0, 5, 0] }}
+                        transition={{ repeat: Infinity, duration: 1.5 }}
+                      >
+                        →
+                      </motion.div>
                     </div>
                   </motion.div>
                 ))}
