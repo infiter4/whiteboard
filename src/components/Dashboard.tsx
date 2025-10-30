@@ -28,10 +28,26 @@ export default function Dashboard() {
   const [whiteboards, setWhiteboards] = useState<Whiteboard[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
+  const [profileUsername, setProfileUsername] = useState<string | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   useEffect(() => {
     fetchData();
   }, [activeTab, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    setProfileLoading(true);
+    supabase
+      .from('profiles')
+      .select('username')
+      .eq('id', user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setProfileUsername(data?.username || null);
+      })
+      .finally(() => setProfileLoading(false));
+  }, [user]);
 
   // Fetches all whiteboards owned by user or where user is a collaborator
   const fetchData = async () => {
@@ -166,7 +182,11 @@ export default function Dashboard() {
             <Menu as="div" className="relative inline-block text-left">
               <Menu.Button className="flex items-center gap-2 px-3 py-2 bg-slate-100 rounded-lg hover:bg-slate-200 transition">
                 <User className="w-4 h-4 text-slate-600" />
-                <span className="text-sm font-semibold text-slate-800">{user?.user_metadata?.username || user?.email}</span>
+                <span className="text-sm font-semibold text-slate-800">
+                  {profileLoading
+                    ? '...'
+                    : profileUsername || user?.email}
+                </span>
               </Menu.Button>
               <Transition
                 as={React.Fragment}

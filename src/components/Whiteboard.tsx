@@ -78,336 +78,66 @@ export default function Whiteboard() {
   const [collaborators, setCollaborators] = useState<CollaboratorProfile[]>([]);
   const [profileDialog, setProfileDialog] = useState<{ open: boolean; user: CollaboratorProfile | null }>({ open: false, user: null });
 
-  // fetch all user info on load or id change
-  useEffect(() => {
-    if (!id) return;
-    (async () => {
-      // get whiteboard for owner
-      const { data: wdata, error: werr } = await supabase.from('whiteboards').select('owner_id').eq('id', id).single();
-      if (werr || !wdata) return;
-      // get collaborators (with roles)
-      const { data: collabs, error: collabErr } = await supabase.from('whiteboard_collaborators').select('user_id,role').eq('whiteboard_id', id);
-      if (collabErr) return;
-      // gather all user ids (owner + collaborators, without duplicate)
-      const ids = [wdata.owner_id, ...(collabs?.map((c: any) => c.user_id).filter((uid: string) => uid !== wdata.owner_id) || [])];
-      const userRoles: { [key: string]: 'owner' | 'editor' | 'viewer' } = { [wdata.owner_id]: 'owner', ...(collabs?.reduce((acc: any, c: any) => ({ ...acc, [c.user_id]: c.role }), {})) };
-      // fetch all profiles with username, email, user_color
-      const { data: users, error: usersErr } = await supabase.from('profiles').select('id,username,user_color').in('id', ids);
-      if (usersErr) return;
-      // Map all roles and profile data together
-      const all: CollaboratorProfile[] = users.map((u: any) => ({ ...u, role: userRoles[u.id] }));
-      setCollaborators(all);
-    })();
-  }, [id]);
+  // 1. Add tool mode state
+  const [mode, setMode] = useState<'select'|'pen'|'highlighter'|'eraser'|'sticky'|'text'|'image'|'rectangle'|'ellipse'|'line'|'arrow'|'laser'|'fullscreen'>('pen');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // 2. Sticky note, image, and text states
+  const [stickies, setStickies] = useState<{id:string, x:number, y:number, color:string, text:string}[]>([]);
+  const [images, setImages] = useState<{id:string, x:number, y:number, url:string, width:number, height:number}[]>([]);
+  const [textboxes, setTextboxes] = useState<{id:string, x:number, y:number, color:string, text:string}[]>([]);
+  const [showStickyInput, setShowStickyInput] = useState<{open:boolean, x:number, y:number}>({open:false,x:0,y:0});
+  const [stickyInputText, setStickyInputText] = useState('');
 
-  useEffect(() => {
-    if (elements.length > 0) {
-      redrawCanvas();
-    }
-  }, [elements, zoom]);
+  // 3. Toolbar rendering
+  const renderToolbar = () => (
+    <div className={
+      'fixed top-1/2 left-4 -translate-y-1/2 z-50 bg-white/90 rounded-xl p-2 flex flex-col items-center shadow-lg border border-slate-300 space-y-2'+
+       (isFullscreen ? ' left-8' : '')
+    }>
+      <button className={`p-2 rounded ${mode==='select'?'bg-blue-200':''}`} onClick={()=>setMode('select')} title="Select"><ArrowLeft /></button>
+      <button className={`p-2 rounded ${mode==='pen'?'bg-blue-200':''}`} onClick={()=>setMode('pen')} title="Pen (freehand)"><Pen /></button>
+      <button className={`p-2 rounded ${mode==='highlighter'?'bg-yellow-100':''}`} onClick={()=>setMode('highlighter')} title="Highlighter"><Type /></button>
+      <button className={`p-2 rounded ${mode==='eraser'?'bg-blue-200':''}`} onClick={()=>setMode('eraser')} title="Eraser"><Eraser /></button>
+      <div className="border-t my-2 w-10 mx-auto border-slate-200"></div>
+      <button className={`p-2 rounded ${mode==='sticky'?'bg-yellow-300/70':''}`} onClick={()=>setMode('sticky')} title="Sticky Note">📝</button>
+      <button className={`p-2 rounded ${mode==='text'?'bg-blue-100':''}`} onClick={()=>setMode('text')} title="Text Box"><Type /></button>
+      <button className={`p-2 rounded ${mode==='image'?'bg-green-100':''}`} onClick={()=>setMode('image')} title="Insert Image">🖼️</button>
+      <div className="border-t my-2 w-10 mx-auto border-slate-200"></div>
+      <button className={`p-2 rounded ${mode==='rectangle'?'bg-blue-100':''}`} onClick={()=>setMode('rectangle')} title="Rectangle"><Square /></button>
+      <button className={`p-2 rounded ${mode==='ellipse'?'bg-blue-100':''}`} onClick={()=>setMode('ellipse')} title="Ellipse"><Circle /></button>
+      <button className={`p-2 rounded ${mode==='line'?'bg-blue-100':''}`} onClick={()=>setMode('line')} title="Line"><Minus /></button>
+      <button className={`p-2 rounded ${mode==='arrow'?'bg-blue-100':''}`} onClick={()=>setMode('arrow')} title="Arrow"><ArrowRight /></button>
+      <div className="border-t my-2 w-10 mx-auto border-slate-200"></div>
+      <button className={`p-2 rounded ${mode==='laser'?'bg-pink-200':''}`} onClick={()=>setMode('laser')} title="Laser Pointer">🔦</button>
+      <button className={`p-2 rounded ${isFullscreen?'bg-slate-500 text-white':'bg-slate-100'}`} onClick={()=>toggleFullscreen()} title="Fullscreen">🖥️</button>
+    </div>
+  );
 
-  const saveWhiteboard = async () => {
-    if (!id || !user) return;
-
-    try {
-      const { error } = await supabase
-        .from('whiteboards')
-        .update({
-          canvas_data: { elements },
-          name: whiteboardName,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id);
-
-      if (error) throw error;
-    } catch (error) {
-      console.error('Error saving whiteboard:', error);
-    }
+  // 4. Fullscreen toggle logic
+  const toggleFullscreen = () => {
+    setIsFullscreen(f => !f);
+    // Optionally trigger browser fullscreen with document.documentElement.requestFullscreen()
   };
+  React.useEffect(()=>{
+    const onEsc = (e:KeyboardEvent)=>{ if (isFullscreen && e.key==='Escape') setIsFullscreen(false); };
+    window.addEventListener('keydown', onEsc);
+    return ()=>window.removeEventListener('keydown', onEsc);
+  },[isFullscreen]);
 
-  const redrawCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.translate(0, 0); // Removed pan.x, pan.y
-    ctx.scale(zoom, zoom);
-
-    elements.forEach((element) => {
-      ctx.strokeStyle = element.color;
-      ctx.lineWidth = element.strokeWidth;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      switch (element.type) {
-        case 'pen':
-        case 'eraser':
-          if (element.points && element.points.length >= 4) {
-            ctx.beginPath();
-            ctx.moveTo(element.points[0], element.points[1]);
-            for (let i = 2; i < element.points.length; i += 2) {
-              ctx.lineTo(element.points[i], element.points[i + 1]);
-            }
-            ctx.strokeStyle = element.type === 'eraser' ? '#ffffff' : element.color;
-            ctx.stroke();
-          }
-          break;
-
-        case 'rectangle':
-          if (element.x !== undefined && element.y !== undefined && element.width && element.height) {
-            ctx.strokeRect(element.x, element.y, element.width, element.height);
-          }
-          break;
-
-        case 'circle':
-          if (element.x !== undefined && element.y !== undefined && element.radius) {
-            ctx.beginPath();
-            ctx.arc(element.x, element.y, element.radius, 0, 2 * Math.PI);
-            ctx.stroke();
-          }
-          break;
-
-        case 'line':
-        case 'arrow':
-          if (element.x1 !== undefined && element.y1 !== undefined && element.x2 !== undefined && element.y2 !== undefined) {
-            ctx.beginPath();
-            ctx.moveTo(element.x1, element.y1);
-            ctx.lineTo(element.x2, element.y2);
-            ctx.stroke();
-
-            if (element.type === 'arrow') {
-              const angle = Math.atan2(element.y2 - element.y1, element.x2 - element.x1);
-              const headLength = 15;
-              ctx.beginPath();
-              ctx.moveTo(element.x2, element.y2);
-              ctx.lineTo(
-                element.x2 - headLength * Math.cos(angle - Math.PI / 6),
-                element.y2 - headLength * Math.sin(angle - Math.PI / 6)
-              );
-              ctx.moveTo(element.x2, element.y2);
-              ctx.lineTo(
-                element.x2 - headLength * Math.cos(angle + Math.PI / 6),
-                element.y2 - headLength * Math.sin(angle + Math.PI / 6)
-              );
-              ctx.stroke();
-            }
-          }
-          break;
-
-        case 'text':
-          if (element.x !== undefined && element.y !== undefined && element.text) {
-            ctx.font = '16px sans-serif';
-            ctx.fillStyle = element.color;
-            ctx.fillText(element.text, element.x, element.y);
-          }
-          break;
-      }
-    });
-
-    ctx.restore();
+  // 5. Add handlers for each mode (stub, TODO)
+  const handleStickyNote = (x:number, y:number) => {
+    setShowStickyInput({open:true, x, y});
   };
-
-  const getMousePos = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) / zoom,
-      y: (e.clientY - rect.top) / zoom,
-    };
+  const addSticky = () => {
+    setStickies(s => [...s, {id:crypto.randomUUID(), x:showStickyInput.x, y:showStickyInput.y, color:'#FFEB3B', text:stickyInputText||'New Note'}]);
+    setShowStickyInput({open:false, x:0, y:0}); setStickyInputText('');
   };
+  // TODO: Add handlers for image placing, textbox, laser pointer, brush types, etc.
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!user || tool === 'pan') return;
-
-    const pos = getMousePos(e);
-    setIsDrawing(true);
-
-    const newElement: DrawingElement = {
-      id: crypto.randomUUID(),
-      type: tool,
-      color,
-      strokeWidth,
-      userId: user.id,
-    };
-
-    if (tool === 'pen' || tool === 'eraser') {
-      newElement.points = [pos.x, pos.y];
-    } else if (tool === 'rectangle' || tool === 'circle') {
-      newElement.x = pos.x;
-      newElement.y = pos.y;
-      newElement.width = 0;
-      newElement.height = 0;
-      newElement.radius = 0;
-    } else if (tool === 'line' || tool === 'arrow') {
-      newElement.x1 = pos.x;
-      newElement.y1 = pos.y;
-      newElement.x2 = pos.x;
-      newElement.y2 = pos.y;
-    }
-
-    setCurrentElement(newElement);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !currentElement) return;
-
-    const pos = getMousePos(e);
-
-    if (tool === 'pen' || tool === 'eraser') {
-      const updatedElement = {
-        ...currentElement,
-        points: [...(currentElement.points || []), pos.x, pos.y],
-      };
-      setCurrentElement(updatedElement);
-      setElements([...elements, updatedElement]);
-    } else if (tool === 'rectangle') {
-      const updatedElement = {
-        ...currentElement,
-        width: pos.x - (currentElement.x || 0),
-        height: pos.y - (currentElement.y || 0),
-      };
-      setCurrentElement(updatedElement);
-    } else if (tool === 'circle') {
-      const dx = pos.x - (currentElement.x || 0);
-      const dy = pos.y - (currentElement.y || 0);
-      const radius = Math.sqrt(dx * dx + dy * dy);
-      const updatedElement = {
-        ...currentElement,
-        radius,
-      };
-      setCurrentElement(updatedElement);
-    } else if (tool === 'line' || tool === 'arrow') {
-      const updatedElement = {
-        ...currentElement,
-        x2: pos.x,
-        y2: pos.y,
-      };
-      setCurrentElement(updatedElement);
-    }
-
-    redrawCanvas();
-  };
-
-  const handleMouseUp = () => {
-    if (!isDrawing || !currentElement) return;
-
-    setIsDrawing(false);
-    const newElements = [...elements, currentElement];
-    setElements(newElements);
-    setHistory([...history.slice(0, historyStep + 1), newElements]);
-    setHistoryStep(historyStep + 1);
-    setCurrentElement(null);
-  };
-
-  const undo = () => {
-    if (historyStep > 0) {
-      setHistoryStep(historyStep - 1);
-      setElements(history[historyStep - 1]);
-    }
-  };
-
-  const redo = () => {
-    if (historyStep < history.length - 1) {
-      setHistoryStep(historyStep + 1);
-      setElements(history[historyStep + 1]);
-    }
-  };
-
-  const colors = ['#000000', '#EF4444', '#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899'];
-
-  const handleInvite = async () => {
-    if (!id || !user || inviteEmail.trim() === "") return;
-    setInviteStatus("");
-    // 1. Lookup user by email
-    const { data: users, error } = await supabase
-      .from("profiles")
-      .select("id")
-      .ilike("username", inviteEmail.trim()) // if you use email in profiles, otherwise fetch from auth.users via edge function or RPC
-      .limit(1);
-
-    if (error) return setInviteStatus("Error finding user.");
-    if (!users || users.length === 0) {
-      setInviteStatus("No user found with that email or username.");
-      return;
-    }
-    const invitedUserId = users[0].id;
-    // 2. Insert to collaborators
-    const { error: collabError } = await supabase
-      .from("whiteboard_collaborators")
-      .insert({ whiteboard_id: id, user_id: invitedUserId, role: "editor" });
-    if (collabError) {
-      if (collabError.code === '23505') {
-        setInviteStatus("User is already a collaborator.");
-      } else {
-        setInviteStatus("Error inviting user.");
-      }
-      return;
-    }
-    setInviteStatus("User invited as collaborator!");
-    setInviteEmail("");
-  };
-
-  const showProfile = (user: CollaboratorProfile) => setProfileDialog({ open: true, user });
-  const closeProfile = () => setProfileDialog({ open: false, user: null });
-
+  // 6. Update return block to render toolbar, fullscreen states, and tool UIs
   return (
-    <div className="h-screen flex flex-col bg-slate-50">
-      <div className="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5 text-slate-600" />
-          </button>
-          <input
-            type="text"
-            value={whiteboardName}
-            onChange={(e) => setWhiteboardName(e.target.value)}
-            onBlur={saveWhiteboard}
-            className="text-lg font-semibold text-slate-900 bg-transparent border-none outline-none focus:bg-slate-50 px-2 py-1 rounded"
-          />
-        </div>
-
-        <div className="flex items-center gap-4">
-          <Menu as="div" className="relative inline-block text-left">
-            <Menu.Button className="flex items-center gap-2 px-3 py-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition">
-              <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white bg-blue-500">
-                {user?.user_metadata?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || '?'}
-              </span>
-              <span className="text-white font-medium text-sm">{user?.user_metadata?.username || user?.email}</span>
-            </Menu.Button>
-            <Transition
-              as={React.Fragment}
-              enter="transition ease-out duration-100"
-              enterFrom="transform opacity-0 scale-95"
-              enterTo="transform opacity-100 scale-100"
-              leave="transition ease-in duration-75"
-              leaveFrom="transform opacity-100 scale-100"
-              leaveTo="transform opacity-0 scale-95">
-              <Menu.Items className="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black/5 focus:outline-none p-2">
-                <div className="px-3 py-2">
-                  <div className="font-semibold text-base text-slate-800">{user?.user_metadata?.username || user?.email}</div>
-                  <div className="text-xs text-slate-500 mt-1">{user?.email}</div>
-                </div>
-                <button
-                  className="w-full text-left mt-2 px-4 py-2 rounded bg-red-500 text-white hover:bg-red-600 transition font-semibold text-sm"
-                  onClick={async () => { await signOut(); navigate('/'); }}
-                >
-                  Logout
-                </button>
-              </Menu.Items>
-            </Transition>
-          </Menu>
-        </div>
-      </div>
-
+    <div className={isFullscreen ? 'fixed inset-0 bg-slate-50 z-50 flex':'h-screen flex flex-col bg-slate-50'}>
+      {renderToolbar()}
       <div className="bg-white border-b border-slate-200 px-6 py-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <button
@@ -613,6 +343,16 @@ export default function Whiteboard() {
             <div className="text-sm text-slate-500 mb-2">{profileDialog.user?.role?.toUpperCase()}</div>
             {/* Optionally display email here if available: <div className="text-sm text-slate-600 mb-1">{profileDialog.user.email}</div> */}
             <button className="mt-4 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded" onClick={closeProfile}>Close</button>
+          </div>
+        </div>
+      )}
+      {/* Add sticky note input modal overlay if showStickyInput.open */}
+      {showStickyInput.open && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg p-8 flex flex-col items-center">
+            <textarea className="border rounded p-2 mb-2 w-72 h-24" value={stickyInputText} autoFocus onChange={e=>setStickyInputText(e.target.value)} placeholder="Sticky note text..." />
+            <button className="bg-yellow-400 px-5 py-2 rounded font-bold" onClick={addSticky}>Add Sticky Note</button>
+            <button className="mt-2 text-sm text-slate-500 underline" onClick={()=>setShowStickyInput({open:false,x:0,y:0})}>Cancel</button>
           </div>
         </div>
       )}
