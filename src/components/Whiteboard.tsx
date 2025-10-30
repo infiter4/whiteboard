@@ -48,7 +48,8 @@ const SHAPES = [
 ];
 
 type DrawElement = {
-  type: 'line' | 'image' | 'text';
+  type: 'line' | 'image' | 'text' | 'shape' | 'sticky';
+  id?: string;
   points?: { x: number; y: number }[];
   color?: string;
   strokeWidth?: number;
@@ -59,6 +60,11 @@ type DrawElement = {
   height?: number;
   text?: string;
   fontSize?: number;
+  shapeType?: string;
+  startX?: number;
+  startY?: number;
+  endX?: number;
+  endY?: number;
 };
 
 export default function Whiteboard() {
@@ -84,6 +90,9 @@ export default function Whiteboard() {
   const [whiteboardName, setWhiteboardName] = useState('Untitled Whiteboard');
   const [isEditingName, setIsEditingName] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selectedElement, setSelectedElement] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [resizeHandle, setResizeHandle] = useState<string | null>(null);
 
   useEffect(() => {
     if (id && user) {
@@ -102,7 +111,7 @@ export default function Whiteboard() {
 
   useEffect(() => {
     redrawCanvas();
-  }, [elements, currentElement, isFullscreen]);
+  }, [elements, currentElement, isFullscreen, selectedElement]);
 
   useEffect(() => {
     const saveInterval = setInterval(() => {
@@ -155,6 +164,116 @@ export default function Whiteboard() {
     }
   };
 
+  const drawShape = (ctx: CanvasRenderingContext2D, element: DrawElement) => {
+    if (!element.startX || !element.startY || !element.endX || !element.endY) return;
+
+    const width = element.endX - element.startX;
+    const height = element.endY - element.startY;
+
+    ctx.save();
+    ctx.strokeStyle = element.color || '#000000';
+    ctx.fillStyle = element.color || '#000000';
+    ctx.lineWidth = element.strokeWidth || 3;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    switch (element.shapeType) {
+      case 'rectangle':
+        ctx.strokeRect(element.startX, element.startY, width, height);
+        break;
+      case 'circle':
+        const radiusX = Math.abs(width) / 2;
+        const radiusY = Math.abs(height) / 2;
+        const centerX = element.startX + width / 2;
+        const centerY = element.startY + height / 2;
+        ctx.beginPath();
+        ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+        ctx.stroke();
+        break;
+      case 'line':
+        ctx.beginPath();
+        ctx.moveTo(element.startX, element.startY);
+        ctx.lineTo(element.endX, element.endY);
+        ctx.stroke();
+        break;
+      case 'arrow':
+        ctx.beginPath();
+        ctx.moveTo(element.startX, element.startY);
+        ctx.lineTo(element.endX, element.endY);
+        ctx.stroke();
+        const angle = Math.atan2(element.endY - element.startY, element.endX - element.startX);
+        const arrowLength = 20;
+        ctx.beginPath();
+        ctx.moveTo(element.endX, element.endY);
+        ctx.lineTo(
+          element.endX - arrowLength * Math.cos(angle - Math.PI / 6),
+          element.endY - arrowLength * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.moveTo(element.endX, element.endY);
+        ctx.lineTo(
+          element.endX - arrowLength * Math.cos(angle + Math.PI / 6),
+          element.endY - arrowLength * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.stroke();
+        break;
+      case 'triangle':
+        ctx.beginPath();
+        ctx.moveTo(element.startX + width / 2, element.startY);
+        ctx.lineTo(element.startX, element.endY);
+        ctx.lineTo(element.endX, element.endY);
+        ctx.closePath();
+        ctx.stroke();
+        break;
+      case 'star':
+        drawStar(ctx, element.startX + width / 2, element.startY + height / 2, 5, Math.abs(width) / 2, Math.abs(width) / 4);
+        break;
+      case 'pentagon':
+        drawPolygon(ctx, element.startX + width / 2, element.startY + height / 2, 5, Math.abs(width) / 2);
+        break;
+      case 'hexagon':
+        drawPolygon(ctx, element.startX + width / 2, element.startY + height / 2, 6, Math.abs(width) / 2);
+        break;
+    }
+    ctx.restore();
+  };
+
+  const drawStar = (ctx: CanvasRenderingContext2D, cx: number, cy: number, spikes: number, outerRadius: number, innerRadius: number) => {
+    let rot = Math.PI / 2 * 3;
+    let x = cx;
+    let y = cy;
+    const step = Math.PI / spikes;
+
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - outerRadius);
+    for (let i = 0; i < spikes; i++) {
+      x = cx + Math.cos(rot) * outerRadius;
+      y = cy + Math.sin(rot) * outerRadius;
+      ctx.lineTo(x, y);
+      rot += step;
+
+      x = cx + Math.cos(rot) * innerRadius;
+      y = cy + Math.sin(rot) * innerRadius;
+      ctx.lineTo(x, y);
+      rot += step;
+    }
+    ctx.lineTo(cx, cy - outerRadius);
+    ctx.closePath();
+    ctx.stroke();
+  };
+
+  const drawPolygon = (ctx: CanvasRenderingContext2D, cx: number, cy: number, sides: number, radius: number) => {
+    const angle = (2 * Math.PI) / sides;
+    ctx.beginPath();
+    for (let i = 0; i < sides; i++) {
+      const x = cx + radius * Math.cos(i * angle - Math.PI / 2);
+      const y = cy + radius * Math.sin(i * angle - Math.PI / 2);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  };
+
   const redrawCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -183,16 +302,154 @@ export default function Whiteboard() {
         const img = new Image();
         img.onload = () => {
           ctx.drawImage(img, element.x || 0, element.y || 0, element.width || 200, element.height || 200);
+
+          if (selectedElement === element.id) {
+            ctx.strokeStyle = '#3B82F6';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(element.x || 0, element.y || 0, element.width || 200, element.height || 200);
+            ctx.setLineDash([]);
+
+            const handleSize = 8;
+            ctx.fillStyle = '#3B82F6';
+            ctx.fillRect((element.x || 0) + (element.width || 200) - handleSize / 2, (element.y || 0) + (element.height || 200) - handleSize / 2, handleSize, handleSize);
+          }
         };
         img.src = element.imageData;
+      } else if (element.type === 'shape') {
+        drawShape(ctx, element);
+      } else if (element.type === 'text' && element.text) {
+        ctx.save();
+        ctx.font = `${element.fontSize || 24}px sans-serif`;
+        ctx.fillStyle = element.color || '#000000';
+        ctx.fillText(element.text, element.x || 0, element.y || 0);
+        ctx.restore();
+      } else if (element.type === 'sticky') {
+        const w = element.width || 200;
+        const h = element.height || 200;
+        const x = element.x || 0;
+        const y = element.y || 0;
+
+        ctx.save();
+        ctx.fillStyle = '#FEF08A';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#EAB308';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+
+        if (element.text) {
+          ctx.fillStyle = '#000000';
+          ctx.font = '16px sans-serif';
+          const lines = element.text.split('\n');
+          lines.forEach((line, i) => {
+            ctx.fillText(line, x + 10, y + 25 + i * 20, w - 20);
+          });
+        }
+
+        if (selectedElement === element.id) {
+          ctx.strokeStyle = '#3B82F6';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.strokeRect(x, y, w, h);
+          ctx.setLineDash([]);
+        }
+        ctx.restore();
       }
     });
   };
 
+  const getCanvasCoordinates = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  };
+
+  const isPointInImage = (x: number, y: number, element: DrawElement) => {
+    if (!element.x || !element.y || !element.width || !element.height) return false;
+    return x >= element.x && x <= element.x + element.width &&
+           y >= element.y && y <= element.y + element.height;
+  };
+
+  const isPointInResizeHandle = (x: number, y: number, element: DrawElement) => {
+    if (!element.x || !element.y || !element.width || !element.height) return false;
+    const handleSize = 16;
+    const handleX = element.x + element.width;
+    const handleY = element.y + element.height;
+    return x >= handleX - handleSize && x <= handleX + handleSize &&
+           y >= handleY - handleSize && y <= handleY + handleSize;
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const { x, y } = getCanvasCoordinates(e);
+
+    if (tool === 'select') {
+      const clickedImage = elements.filter(el => (el.type === 'image' || el.type === 'sticky')).reverse().find(el => {
+        if (isPointInResizeHandle(x, y, el)) {
+          setResizeHandle(el.id || '');
+          setSelectedElement(el.id || '');
+          return true;
+        }
+        return isPointInImage(x, y, el);
+      });
+
+      if (clickedImage) {
+        setSelectedElement(clickedImage.id || '');
+        if (!resizeHandle) {
+          setDragOffset({
+            x: x - (clickedImage.x || 0),
+            y: y - (clickedImage.y || 0)
+          });
+        }
+        setIsDrawing(true);
+      } else {
+        setSelectedElement(null);
+      }
+      return;
+    }
+
+    if (tool === 'text') {
+      const text = prompt('Enter text:');
+      if (text) {
+        const newElement: DrawElement = {
+          type: 'text',
+          id: Date.now().toString(),
+          text,
+          x,
+          y,
+          color,
+          fontSize: 24
+        };
+        const newElements = [...elements, newElement];
+        setElements(newElements);
+        setHistory([...history.slice(0, historyStep + 1), newElements]);
+        setHistoryStep(historyStep + 1);
+      }
+      return;
+    }
+
+    if (tool === 'sticky') {
+      const text = prompt('Enter sticky note text:');
+      const newElement: DrawElement = {
+        type: 'sticky',
+        id: Date.now().toString(),
+        text: text || '',
+        x,
+        y,
+        width: 200,
+        height: 200
+      };
+      const newElements = [...elements, newElement];
+      setElements(newElements);
+      setHistory([...history.slice(0, historyStep + 1), newElements]);
+      setHistoryStep(historyStep + 1);
+      return;
+    }
 
     if (tool === 'pen' || tool === 'eraser') {
       setIsDrawing(true);
@@ -202,22 +459,79 @@ export default function Whiteboard() {
         color: tool === 'eraser' ? '#ffffff' : color,
         strokeWidth: tool === 'eraser' ? strokeWidth * 3 : strokeWidth
       });
+    } else if (SHAPES.some(s => s.tool === tool)) {
+      setIsDrawing(true);
+      setCurrentElement({
+        type: 'shape',
+        shapeType: tool,
+        startX: x,
+        startY: y,
+        endX: x,
+        endY: y,
+        color,
+        strokeWidth
+      });
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !currentElement || (tool !== 'pen' && tool !== 'eraser')) return;
+    const { x, y } = getCanvasCoordinates(e);
 
-    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    if (tool === 'select' && isDrawing && selectedElement) {
+      const element = elements.find(el => el.id === selectedElement);
+      if (element && (element.type === 'image' || element.type === 'sticky')) {
+        if (resizeHandle) {
+          const newElements = elements.map(el => {
+            if (el.id === selectedElement) {
+              return {
+                ...el,
+                width: Math.max(50, x - (el.x || 0)),
+                height: Math.max(50, y - (el.y || 0))
+              };
+            }
+            return el;
+          });
+          setElements(newElements);
+        } else {
+          const newElements = elements.map(el => {
+            if (el.id === selectedElement) {
+              return {
+                ...el,
+                x: x - dragOffset.x,
+                y: y - dragOffset.y
+              };
+            }
+            return el;
+          });
+          setElements(newElements);
+        }
+      }
+      return;
+    }
 
-    setCurrentElement(elem =>
-      elem && elem.points ? { ...elem, points: [...elem.points, { x, y }] } : null
-    );
+    if (!isDrawing || !currentElement) return;
+
+    if (tool === 'pen' || tool === 'eraser') {
+      setCurrentElement(elem =>
+        elem && elem.points ? { ...elem, points: [...elem.points, { x, y }] } : null
+      );
+    } else if (SHAPES.some(s => s.tool === tool)) {
+      setCurrentElement(elem =>
+        elem ? { ...elem, endX: x, endY: y } : null
+      );
+    }
   };
 
   const handleMouseUp = () => {
+    if (tool === 'select' && selectedElement && isDrawing) {
+      setIsDrawing(false);
+      setResizeHandle(null);
+      const newElements = [...elements];
+      setHistory([...history.slice(0, historyStep + 1), newElements]);
+      setHistoryStep(historyStep + 1);
+      return;
+    }
+
     if (isDrawing && currentElement) {
       const newElements = [...elements, currentElement];
       setElements(newElements);
@@ -250,6 +564,7 @@ export default function Whiteboard() {
 
         const newElement: DrawElement = {
           type: 'image',
+          id: Date.now().toString(),
           imageData,
           x: 100,
           y: 100,
@@ -396,6 +711,13 @@ export default function Whiteboard() {
                 <Eraser className="w-4 h-4" />
               </button>
               <button
+                onClick={() => setTool('text')}
+                title="Text"
+                className={`p-2.5 rounded-lg transition-all ${tool === 'text' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+              >
+                <Type className="w-4 h-4" />
+              </button>
+              <button
                 onClick={() => setTool('sticky')}
                 title="Sticky Note"
                 className={`p-2.5 rounded-lg transition-all ${tool === 'sticky' ? 'bg-white shadow-sm text-yellow-600' : 'text-slate-600 hover:bg-white/50'}`}
@@ -406,6 +728,19 @@ export default function Whiteboard() {
 
             <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
               {SHAPES.slice(0, 4).map(({ tool: shapeTool, icon: Icon, label }) => (
+                <button
+                  key={shapeTool}
+                  onClick={() => setTool(shapeTool)}
+                  title={label}
+                  className={`p-2.5 rounded-lg transition-all ${tool === shapeTool ? 'bg-white shadow-sm text-blue-600' : 'text-slate-600 hover:bg-white/50'}`}
+                >
+                  <Icon className="w-4 h-4" />
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+              {SHAPES.slice(4).map(({ tool: shapeTool, icon: Icon, label }) => (
                 <button
                   key={shapeTool}
                   onClick={() => setTool(shapeTool)}
