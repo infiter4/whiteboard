@@ -24,7 +24,8 @@ import {
   Home,
   Users,
   UserPlus,
-  X
+  X,
+  MessageSquare
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -64,6 +65,20 @@ type DrawElement = {
   startY?: number;
   endX?: number;
   endY?: number;
+  layer?: number;
+};
+
+export type Comment = {
+  id: number;
+  whiteboard_id: string;
+  element_id: string;
+  user_id: string;
+  comment_text: string;
+  created_at: string;
+  profiles: {
+    username: string;
+    avatar_url: string | null;
+  } | null;
 };
 
 export default function Whiteboard() {
@@ -96,6 +111,13 @@ export default function Whiteboard() {
   const [collaboratorEmail, setCollaboratorEmail] = useState('');
   const [collaborators, setCollaborators] = useState<any[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showCommentsPanel, setShowCommentsPanel] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [currentLayer, setCurrentLayer] = useState(0);
+  const [layers, setLayers] = useState<string[]>(['Layer 1']);
+  const [showLayerMenu, setShowLayerMenu] = useState(false);
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
 
   useEffect(() => {
     if (id && user) {
@@ -114,7 +136,7 @@ export default function Whiteboard() {
 
   useEffect(() => {
     redrawCanvas();
-  }, [elements, currentElement, isFullscreen, selectedElement]);
+  }, [elements, currentElement, isFullscreen, selectedElement, currentLayer]);
 
   useEffect(() => {
     const saveInterval = setInterval(() => {
@@ -182,7 +204,11 @@ export default function Whiteboard() {
 
     switch (element.shapeType) {
       case 'rectangle':
-        ctx.strokeRect(element.startX, element.startY, width, height);
+        if (element.strokeWidth === 0) {
+          ctx.fillRect(element.startX, element.startY, width, height);
+        } else {
+          ctx.strokeRect(element.startX, element.startY, width, height);
+        }
         break;
       case 'circle':
         const radiusX = Math.abs(width) / 2;
@@ -191,7 +217,11 @@ export default function Whiteboard() {
         const centerY = element.startY + height / 2;
         ctx.beginPath();
         ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-        ctx.stroke();
+        if (element.strokeWidth === 0) {
+          ctx.fill();
+        } else {
+          ctx.stroke();
+        }
         break;
       case 'line':
         ctx.beginPath();
@@ -287,7 +317,8 @@ export default function Whiteboard() {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    [...elements, ...(currentElement ? [currentElement] : [])].forEach(element => {
+    const visibleElements = elements.filter(el => (el.layer || 0) === currentLayer);
+    [...visibleElements, ...(currentElement ? [currentElement] : [])].forEach(element => {
       if (element.type === 'line' && element.points) {
         ctx.save();
         ctx.strokeStyle = element.color || '#000000';
@@ -392,7 +423,7 @@ export default function Whiteboard() {
     const { x, y } = getCanvasCoordinates(e);
 
     if (tool === 'select') {
-      const clickedImage = elements.filter(el => (el.type === 'image' || el.type === 'sticky')).reverse().find(el => {
+      const clickedImage = elements.filter(el => (el.type === 'image' || el.type === 'sticky') && (el.layer || 0) === currentLayer).reverse().find(el => {
         if (isPointInResizeHandle(x, y, el)) {
           setResizeHandle(el.id || '');
           setSelectedElement(el.id || '');
@@ -403,6 +434,8 @@ export default function Whiteboard() {
 
       if (clickedImage) {
         setSelectedElement(clickedImage.id || '');
+        loadComments(clickedImage.id || '');
+        setShowCommentsPanel(true);
         if (!resizeHandle) {
           setDragOffset({
             x: x - (clickedImage.x || 0),
@@ -412,6 +445,7 @@ export default function Whiteboard() {
         setIsDrawing(true);
       } else {
         setSelectedElement(null);
+        setShowCommentsPanel(false);
       }
       return;
     }
@@ -426,7 +460,8 @@ export default function Whiteboard() {
           x,
           y,
           color,
-          fontSize: 24
+          fontSize: 24,
+          layer: currentLayer
         };
         const newElements = [...elements, newElement];
         setElements(newElements);
@@ -445,7 +480,8 @@ export default function Whiteboard() {
         x,
         y,
         width: 200,
-        height: 200
+        height: 200,
+        layer: currentLayer
       };
       const newElements = [...elements, newElement];
       setElements(newElements);
@@ -460,7 +496,8 @@ export default function Whiteboard() {
         type: 'line',
         points: [{ x, y }],
         color: tool === 'eraser' ? '#ffffff' : color,
-        strokeWidth: tool === 'eraser' ? strokeWidth * 3 : strokeWidth
+        strokeWidth: tool === 'eraser' ? strokeWidth * 3 : strokeWidth,
+        layer: currentLayer
       });
     } else if (SHAPES.some(s => s.tool === tool)) {
       setIsDrawing(true);
@@ -472,7 +509,8 @@ export default function Whiteboard() {
         endX: x,
         endY: y,
         color,
-        strokeWidth
+        strokeWidth,
+        layer: currentLayer
       });
     }
   };
@@ -572,7 +610,8 @@ export default function Whiteboard() {
           x: 100,
           y: 100,
           width,
-          height
+          height,
+          layer: currentLayer
         };
         const newElements = [...elements, newElement];
         setElements(newElements);
@@ -705,6 +744,48 @@ export default function Whiteboard() {
     }
   };
 
+  const loadComments = async (elementId: string) => {
+    if (!id) return;
+    try {
+      const { data, error } = await supabase
+        .from('element_comments')
+        .select('*, profiles(username, avatar_url)')
+        .eq('whiteboard_id', id)
+        .eq('element_id', elementId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      setComments(data || []);
+    } catch (error) {
+      console.error('Error loading comments:', error);
+    }
+  };
+
+  const addComment = async () => {
+    if (!id || !user || !selectedElement || !newComment.trim()) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('element_comments')
+        .insert({
+          whiteboard_id: id,
+          element_id: selectedElement,
+          user_id: user.id,
+          comment_text: newComment.trim(),
+        })
+        .select('*, profiles(username, avatar_url)')
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setComments([...comments, data as Comment]);
+      }
+      setNewComment('');
+    } catch (error) {
+      console.error('Error adding comment:', error);
+    }
+  };
+
   const deleteWhiteboard = async () => {
     if (!id || !user) return;
     try {
@@ -719,6 +800,322 @@ export default function Whiteboard() {
     } catch (error) {
       console.error('Error deleting whiteboard:', error);
       alert('Failed to delete whiteboard');
+    }
+  };
+
+  const addLayer = () => {
+    const newLayerName = `Layer ${layers.length + 1}`;
+    setLayers([...layers, newLayerName]);
+    setCurrentLayer(layers.length);
+  };
+
+  const deleteLayer = (index: number) => {
+    if (layers.length === 1) {
+      alert('Cannot delete the last layer');
+      return;
+    }
+    const newLayers = layers.filter((_, i) => i !== index);
+    setLayers(newLayers);
+    if (currentLayer >= newLayers.length) {
+      setCurrentLayer(newLayers.length - 1);
+    }
+    // Remove elements from deleted layer
+    setElements(elements.filter(el => (el.layer || 0) !== index));
+  };
+
+  const moveLayerUp = (index: number) => {
+    if (index === 0) return;
+    const newLayers = [...layers];
+    [newLayers[index], newLayers[index - 1]] = [newLayers[index - 1], newLayers[index]];
+    setLayers(newLayers);
+    // Update element layers
+    const newElements = elements.map(el => {
+      if ((el.layer || 0) === index) return { ...el, layer: index - 1 };
+      if ((el.layer || 0) === index - 1) return { ...el, layer: index };
+      return el;
+    });
+    setElements(newElements);
+  };
+
+  const moveLayerDown = (index: number) => {
+    if (index === layers.length - 1) return;
+    const newLayers = [...layers];
+    [newLayers[index], newLayers[index + 1]] = [newLayers[index + 1], newLayers[index]];
+    setLayers(newLayers);
+    // Update element layers
+    const newElements = elements.map(el => {
+      if ((el.layer || 0) === index) return { ...el, layer: index + 1 };
+      if ((el.layer || 0) === index + 1) return { ...el, layer: index };
+      return el;
+    });
+    setElements(newElements);
+  };
+
+  const renameLayer = (index: number, newName: string) => {
+    const newLayers = [...layers];
+    newLayers[index] = newName;
+    setLayers(newLayers);
+  };
+
+  const getVisibleElements = () => {
+    return elements.filter(el => (el.layer || 0) === currentLayer);
+  };
+
+  const templates = [
+    {
+      name: 'Brainstorming Board',
+      description: 'Sticky notes for idea generation',
+      icon: '💡',
+      elements: [
+        // Premium gradient header with shadow
+        { type: 'shape' as const, id: Date.now().toString() + '0a', shapeType: 'rectangle', startX: 40, startY: 25, endX: 960, endY: 135, color: '#1E3A8A', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '0b', shapeType: 'rectangle', startX: 50, startY: 30, endX: 950, endY: 125, color: '#3B82F6', strokeWidth: 0, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1', text: '💡 BRAINSTORMING SESSION 2024', x: 140, y: 88, color: '#FFFFFF', fontSize: 44, layer: 0 },
+        // Decorative corner elements
+        { type: 'shape' as const, id: Date.now().toString() + '1a', shapeType: 'circle', startX: 70, startY: 45, endX: 135, endY: 110, color: '#60A5FA', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '1b', shapeType: 'circle', startX: 865, startY: 45, endX: 930, endY: 110, color: '#60A5FA', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1c', text: '⚡', x: 90, y: 88, color: '#FCD34D', fontSize: 32, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1d', text: '⚡', x: 885, y: 88, color: '#FCD34D', fontSize: 32, layer: 0 },
+        
+        // IDEAS Section with premium styling
+        { type: 'shape' as const, id: Date.now().toString() + '2box', shapeType: 'rectangle', startX: 60, startY: 155, endX: 940, endY: 195, color: '#F3E8FF', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '2line', shapeType: 'line', startX: 60, startY: 195, endX: 940, endY: 195, color: '#8B5CF6', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '2a', text: '✨ CREATIVE IDEAS & CONCEPTS', x: 320, y: 182, color: '#6B21A8', fontSize: 32, layer: 0 },
+        
+        // Idea cards with shadows and borders
+        { type: 'shape' as const, id: Date.now().toString() + '2s1', shapeType: 'rectangle', startX: 75, startY: 225, endX: 315, endY: 465, color: '#E0E7FF', strokeWidth: 0, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '2', text: '💭 IDEA #1\n━━━━━━━━━━\n\n"Innovative product feature that solves X problem"\n\n🎯 Target: New users\n📊 Impact: High', x: 80, y: 230, width: 230, height: 230, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '3s1', shapeType: 'rectangle', startX: 335, startY: 225, endX: 575, endY: 465, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '3', text: '🚀 IDEA #2\n━━━━━━━━━━\n\n"Marketing campaign to boost engagement"\n\n🎯 Target: All users\n📊 Impact: Medium', x: 340, y: 230, width: 230, height: 230, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '4s1', shapeType: 'rectangle', startX: 595, startY: 225, endX: 835, endY: 465, color: '#FEF3C7', strokeWidth: 0, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '4', text: '⭐ IDEA #3\n━━━━━━━━━━\n\n"Partnership opportunity with industry leader"\n\n🎯 Target: B2B\n📊 Impact: Very High', x: 600, y: 230, width: 230, height: 230, layer: 0 },
+        
+        // ACTION ITEMS Section
+        { type: 'shape' as const, id: Date.now().toString() + '5box', shapeType: 'rectangle', startX: 60, startY: 485, endX: 940, endY: 525, color: '#FEE2E2', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '5line', shapeType: 'line', startX: 60, startY: 525, endX: 940, endY: 525, color: '#EF4444', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5a', text: '🎯 ACTION ITEMS & NEXT STEPS', x: 300, y: 512, color: '#991B1B', fontSize: 32, layer: 0 },
+        
+        // Action cards
+        { type: 'shape' as const, id: Date.now().toString() + '5s1', shapeType: 'rectangle', startX: 75, startY: 545, endX: 315, endY: 745, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '5', text: '✅ ACTION #1\n━━━━━━━━━━\n\nResearch competitors\n\n👤 Owner: Team Lead\n📅 Due: This Week\n⚡ Priority: HIGH', x: 80, y: 550, width: 230, height: 190, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '6s1', shapeType: 'rectangle', startX: 335, startY: 545, endX: 575, endY: 745, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '6', text: '✅ ACTION #2\n━━━━━━━━━━\n\nCreate prototype\n\n👤 Owner: Design Team\n📅 Due: Next Week\n⚡ Priority: MEDIUM', x: 340, y: 550, width: 230, height: 190, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '7s1', shapeType: 'rectangle', startX: 595, startY: 545, endX: 835, endY: 745, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '7', text: '✅ ACTION #3\n━━━━━━━━━━\n\nSchedule review meeting\n\n👤 Owner: PM\n📅 Due: Friday\n⚡ Priority: HIGH', x: 600, y: 550, width: 230, height: 190, layer: 0 },
+        
+        // Premium decorative elements
+        { type: 'shape' as const, id: Date.now().toString() + '8', shapeType: 'star', startX: 860, startY: 210, endX: 920, endY: 270, color: '#FBBF24', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '9', shapeType: 'star', startX: 860, startY: 540, endX: 920, endY: 600, color: '#F59E0B', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '10', shapeType: 'circle', startX: 870, startY: 350, endX: 910, endY: 390, color: '#EC4899', strokeWidth: 3, layer: 0 },
+      ]
+    },
+    {
+      name: 'Flowchart',
+      description: 'Process flow diagram',
+      icon: '📊',
+      elements: [
+        // Premium header with depth
+        { type: 'shape' as const, id: Date.now().toString() + '0a', shapeType: 'rectangle', startX: 40, startY: 25, endX: 960, endY: 135, color: '#065F46', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '0b', shapeType: 'rectangle', startX: 50, startY: 30, endX: 950, endY: 125, color: '#10B981', strokeWidth: 0, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1', text: '📊 ENTERPRISE WORKFLOW', x: 280, y: 88, color: '#FFFFFF', fontSize: 46, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '1a', shapeType: 'hexagon', startX: 75, startY: 45, endX: 140, endY: 110, color: '#34D399', strokeWidth: 5, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '1b', shapeType: 'hexagon', startX: 860, startY: 45, endX: 925, endY: 110, color: '#34D399', strokeWidth: 5, layer: 0 },
+        
+        // START node with premium styling
+        { type: 'shape' as const, id: Date.now().toString() + '2a', shapeType: 'circle', startX: 370, startY: 145, endX: 630, endY: 235, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '2b', shapeType: 'rectangle', startX: 410, startY: 160, endX: 590, endY: 220, color: '#1E40AF', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '2', shapeType: 'rectangle', startX: 415, startY: 165, endX: 585, endY: 215, color: '#3B82F6', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '3', text: '🚀 INITIATE', x: 445, y: 197, color: '#FFFFFF', fontSize: 28, layer: 0 },
+        
+        // PROCESS node
+        { type: 'shape' as const, id: Date.now().toString() + '4a', shapeType: 'rectangle', startX: 370, startY: 275, endX: 630, endY: 375, color: '#F3E8FF', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '4b', shapeType: 'rectangle', startX: 410, startY: 295, endX: 590, endY: 355, color: '#6B21A8', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '4', shapeType: 'rectangle', startX: 415, startY: 300, endX: 585, endY: 350, color: '#8B5CF6', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5', text: '⚙️ EXECUTE', x: 445, y: 332, color: '#FFFFFF', fontSize: 28, layer: 0 },
+        
+        // DECISION diamond
+        { type: 'shape' as const, id: Date.now().toString() + '5a', shapeType: 'pentagon', startX: 405, startY: 405, endX: 595, endY: 505, color: '#FEF3C7', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5b', text: '❓ VALIDATE', x: 435, y: 462, color: '#92400E', fontSize: 26, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5c', text: 'YES', x: 520, y: 520, color: '#10B981', fontSize: 20, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5d', text: 'NO', x: 620, y: 450, color: '#EF4444', fontSize: 20, layer: 0 },
+        
+        // SUCCESS node
+        { type: 'shape' as const, id: Date.now().toString() + '6a', shapeType: 'circle', startX: 370, startY: 545, endX: 630, endY: 645, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '6b', shapeType: 'rectangle', startX: 410, startY: 565, endX: 590, endY: 625, color: '#065F46', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '6', shapeType: 'rectangle', startX: 415, startY: 570, endX: 585, endY: 620, color: '#10B981', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '7', text: '✓ SUCCESS', x: 440, y: 602, color: '#FFFFFF', fontSize: 28, layer: 0 },
+        
+        // RETRY path
+        { type: 'shape' as const, id: Date.now().toString() + '7a', shapeType: 'rectangle', startX: 670, startY: 420, endX: 850, endY: 490, color: '#FEE2E2', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '7b', shapeType: 'rectangle', startX: 680, startY: 430, endX: 840, endY: 480, color: '#EF4444', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '7c', text: '🔄 RETRY', x: 730, y: 462, color: '#FFFFFF', fontSize: 24, layer: 0 },
+        
+        // Premium arrows
+        { type: 'shape' as const, id: Date.now().toString() + '8', shapeType: 'arrow', startX: 500, startY: 220, endX: 500, endY: 295, color: '#6366F1', strokeWidth: 6, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '9', shapeType: 'arrow', startX: 500, startY: 355, endX: 500, endY: 405, color: '#A855F7', strokeWidth: 6, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '10', shapeType: 'arrow', startX: 500, startY: 505, endX: 500, endY: 565, color: '#10B981', strokeWidth: 6, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '11', shapeType: 'arrow', startX: 595, startY: 455, endX: 680, endY: 455, color: '#EF4444', strokeWidth: 5, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '12', shapeType: 'arrow', startX: 760, startY: 430, endX: 760, endY: 325, color: '#F59E0B', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '13', shapeType: 'arrow', startX: 760, startY: 325, endX: 590, endY: 325, color: '#F59E0B', strokeWidth: 4, layer: 0 },
+        
+        // Info panels
+        { type: 'shape' as const, id: Date.now().toString() + '14a', shapeType: 'rectangle', startX: 60, startY: 160, endX: 340, endY: 220, color: '#F0F9FF', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '14b', shapeType: 'rectangle', startX: 65, startY: 165, endX: 335, endY: 215, color: '#DBEAFE', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '14', text: '📋 Phase 1: Setup\nDuration: 5 min', x: 85, y: 195, color: '#1E40AF', fontSize: 18, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '15a', shapeType: 'rectangle', startX: 60, startY: 295, endX: 340, endY: 355, color: '#FAF5FF', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '15b', shapeType: 'rectangle', startX: 65, startY: 300, endX: 335, endY: 350, color: '#F3E8FF', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '15', text: '📋 Phase 2: Process\nDuration: 15 min', x: 85, y: 330, color: '#6B21A8', fontSize: 18, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '16a', shapeType: 'rectangle', startX: 60, startY: 570, endX: 340, endY: 630, color: '#F0FDF4', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '16b', shapeType: 'rectangle', startX: 65, startY: 575, endX: 335, endY: 625, color: '#D1FAE5', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '16', text: '📋 Phase 3: Complete\nTotal: ~20 min', x: 85, y: 605, color: '#065F46', fontSize: 18, layer: 0 },
+      ]
+    },
+    {
+      name: 'Mind Map',
+      description: 'Central idea with branches',
+      icon: '🧠',
+      elements: [
+        // Premium Header
+        { type: 'shape' as const, id: Date.now().toString() + '0a', shapeType: 'rectangle', startX: 40, startY: 25, endX: 960, endY: 135, color: '#9F1239', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '0', shapeType: 'rectangle', startX: 50, startY: 30, endX: 950, endY: 125, color: '#EC4899', strokeWidth: 0, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1', text: '🧠 STRATEGIC MIND MAP', x: 280, y: 88, color: '#FFFFFF', fontSize: 46, layer: 0 },
+        // Central idea with glow
+        { type: 'shape' as const, id: Date.now().toString() + '2a', shapeType: 'circle', startX: 380, startY: 280, endX: 620, endY: 520, color: '#FCE7F3', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '2', shapeType: 'circle', startX: 400, startY: 300, endX: 600, endY: 500, color: '#EC4899', strokeWidth: 6, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '3', text: '💡 MAIN\nIDEA', x: 445, y: 390, color: '#BE185D', fontSize: 32, layer: 0 },
+        // Branch 1 - Top Left (Blue)
+        { type: 'shape' as const, id: Date.now().toString() + '4a', shapeType: 'circle', startX: 130, startY: 140, endX: 300, endY: 310, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '4', shapeType: 'circle', startX: 150, startY: 160, endX: 280, endY: 290, color: '#3B82F6', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5', text: '🔵 Branch 1', x: 165, y: 230, color: '#1E40AF', fontSize: 20, layer: 0 },
+        // Branch 2 - Top Right (Green)
+        { type: 'shape' as const, id: Date.now().toString() + '6a', shapeType: 'circle', startX: 700, startY: 140, endX: 870, endY: 310, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '6', shapeType: 'circle', startX: 720, startY: 160, endX: 850, endY: 290, color: '#10B981', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '7', text: '🟢 Branch 2', x: 735, y: 230, color: '#065F46', fontSize: 20, layer: 0 },
+        // Branch 3 - Bottom Left (Orange)
+        { type: 'shape' as const, id: Date.now().toString() + '8a', shapeType: 'circle', startX: 130, startY: 490, endX: 300, endY: 660, color: '#FEF3C7', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '8', shapeType: 'circle', startX: 150, startY: 510, endX: 280, endY: 640, color: '#F59E0B', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '9', text: '🟠 Branch 3', x: 165, y: 580, color: '#92400E', fontSize: 20, layer: 0 },
+        // Branch 4 - Bottom Right (Purple)
+        { type: 'shape' as const, id: Date.now().toString() + '10a', shapeType: 'circle', startX: 700, startY: 490, endX: 870, endY: 660, color: '#F3E8FF', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '10', shapeType: 'circle', startX: 720, startY: 510, endX: 850, endY: 640, color: '#8B5CF6', strokeWidth: 5, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '11', text: '🟣 Branch 4', x: 735, y: 580, color: '#6B21A8', fontSize: 20, layer: 0 },
+        // Connecting lines with gradient effect
+        { type: 'shape' as const, id: Date.now().toString() + '12', shapeType: 'line', startX: 400, startY: 330, endX: 280, endY: 240, color: '#3B82F6', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '13', shapeType: 'line', startX: 600, startY: 330, endX: 720, endY: 240, color: '#10B981', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '14', shapeType: 'line', startX: 400, startY: 470, endX: 280, endY: 560, color: '#F59E0B', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '15', shapeType: 'line', startX: 600, startY: 470, endX: 720, endY: 560, color: '#8B5CF6', strokeWidth: 4, layer: 0 },
+        // Decorative elements
+        { type: 'shape' as const, id: Date.now().toString() + '16', shapeType: 'star', startX: 50, startY: 350, endX: 100, endY: 400, color: '#FBBF24', strokeWidth: 3, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '17', shapeType: 'star', startX: 900, startY: 350, endX: 950, endY: 400, color: '#FBBF24', strokeWidth: 3, layer: 0 },
+      ]
+    },
+    {
+      name: 'Kanban Board',
+      description: 'Task management columns',
+      icon: '📋',
+      elements: [
+        // Header with gradient
+        { type: 'shape' as const, id: Date.now().toString() + '0', shapeType: 'rectangle', startX: 50, startY: 30, endX: 950, endY: 110, color: '#8B5CF6', strokeWidth: 0, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1', text: '📋 KANBAN BOARD', x: 280, y: 80, color: '#FFFFFF', fontSize: 48, layer: 0 },
+        // Decorative elements
+        { type: 'shape' as const, id: Date.now().toString() + '1a', shapeType: 'pentagon', startX: 80, startY: 45, endX: 140, endY: 95, color: '#C084FC', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '1b', shapeType: 'pentagon', startX: 860, startY: 45, endX: 920, endY: 95, color: '#C084FC', strokeWidth: 4, layer: 0 },
+        
+        // TO DO Column (Red)
+        { type: 'shape' as const, id: Date.now().toString() + '2a', shapeType: 'rectangle', startX: 80, startY: 140, endX: 330, endY: 200, color: '#FEE2E2', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '2', shapeType: 'rectangle', startX: 100, startY: 150, endX: 310, endY: 190, color: '#EF4444', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '3', text: '🔴 TO DO', x: 160, y: 177, color: '#991B1B', fontSize: 26, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '8', text: '☐ Task 1\n\nPriority: High\nDue: Today', x: 110, y: 220, width: 190, height: 160, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '9', text: '☐ Task 2\n\nPriority: Medium\nDue: Tomorrow', x: 110, y: 400, width: 190, height: 160, layer: 0 },
+        
+        // IN PROGRESS Column (Orange)
+        { type: 'shape' as const, id: Date.now().toString() + '4a', shapeType: 'rectangle', startX: 360, startY: 140, endX: 640, endY: 200, color: '#FEF3C7', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '4', shapeType: 'rectangle', startX: 380, startY: 150, endX: 620, endY: 190, color: '#F59E0B', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5', text: '🟡 IN PROGRESS', x: 415, y: 177, color: '#92400E', fontSize: 26, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '10', text: '⏳ Task 3\n\nStatus: Working\nProgress: 60%', x: 390, y: 220, width: 220, height: 160, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '10a', text: '⏳ Task 4\n\nStatus: Review\nProgress: 80%', x: 390, y: 400, width: 220, height: 160, layer: 0 },
+        
+        // DONE Column (Green)
+        { type: 'shape' as const, id: Date.now().toString() + '6a', shapeType: 'rectangle', startX: 670, startY: 140, endX: 920, endY: 200, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '6', shapeType: 'rectangle', startX: 690, startY: 150, endX: 900, endY: 190, color: '#10B981', strokeWidth: 4, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '7', text: '🟢 DONE', x: 750, y: 177, color: '#065F46', fontSize: 26, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '11', text: '✓ Task 5\n\nCompleted!\n🎉 Success', x: 700, y: 220, width: 190, height: 160, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '11a', text: '✓ Task 6\n\nDeployed\n✨ Live', x: 700, y: 400, width: 190, height: 160, layer: 0 },
+        
+        // Decorative dividers
+        { type: 'shape' as const, id: Date.now().toString() + '12', shapeType: 'line', startX: 345, startY: 150, endX: 345, endY: 700, color: '#E5E7EB', strokeWidth: 3, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '13', shapeType: 'line', startX: 655, startY: 150, endX: 655, endY: 700, color: '#E5E7EB', strokeWidth: 3, layer: 0 },
+      ]
+    },
+    {
+      name: 'Weekly Planner',
+      description: 'Week schedule layout',
+      icon: '📅',
+      elements: [
+        // Header with gradient
+        { type: 'shape' as const, id: Date.now().toString() + '0', shapeType: 'rectangle', startX: 50, startY: 30, endX: 950, endY: 110, color: '#F59E0B', strokeWidth: 0, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '1', text: '📅 WEEKLY PLANNER', x: 250, y: 80, color: '#FFFFFF', fontSize: 48, layer: 0 },
+        // Decorative calendar icons
+        { type: 'shape' as const, id: Date.now().toString() + '1a', shapeType: 'rectangle', startX: 80, startY: 50, endX: 130, endY: 90, color: '#FCD34D', strokeWidth: 4, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '1b', shapeType: 'rectangle', startX: 870, startY: 50, endX: 920, endY: 90, color: '#FCD34D', strokeWidth: 4, layer: 0 },
+        
+        // Weekdays (Blue theme)
+        { type: 'shape' as const, id: Date.now().toString() + '2a', shapeType: 'rectangle', startX: 80, startY: 140, endX: 230, endY: 200, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '2', shapeType: 'rectangle', startX: 100, startY: 150, endX: 210, endY: 190, color: '#3B82F6', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '3', text: '🟦 MON', x: 130, y: 177, color: '#1E40AF', fontSize: 20, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '4a', shapeType: 'rectangle', startX: 250, startY: 140, endX: 400, endY: 200, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '4', shapeType: 'rectangle', startX: 270, startY: 150, endX: 380, endY: 190, color: '#3B82F6', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '5', text: '🟦 TUE', x: 300, y: 177, color: '#1E40AF', fontSize: 20, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '6a', shapeType: 'rectangle', startX: 420, startY: 140, endX: 570, endY: 200, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '6', shapeType: 'rectangle', startX: 440, startY: 150, endX: 550, endY: 190, color: '#3B82F6', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '7', text: '🟦 WED', x: 465, y: 177, color: '#1E40AF', fontSize: 20, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '8a', shapeType: 'rectangle', startX: 590, startY: 140, endX: 740, endY: 200, color: '#DBEAFE', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '8', shapeType: 'rectangle', startX: 610, startY: 150, endX: 720, endY: 190, color: '#3B82F6', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '9', text: '🟦 THU', x: 635, y: 177, color: '#1E40AF', fontSize: 20, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '10a', shapeType: 'rectangle', startX: 760, startY: 140, endX: 910, endY: 200, color: '#D1FAE5', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '10', shapeType: 'rectangle', startX: 780, startY: 150, endX: 890, endY: 190, color: '#10B981', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '11', text: '🟩 FRI', x: 815, y: 177, color: '#065F46', fontSize: 20, layer: 0 },
+        
+        // Weekend (Pink theme)
+        { type: 'shape' as const, id: Date.now().toString() + '12a', shapeType: 'rectangle', startX: 80, startY: 220, endX: 280, endY: 280, color: '#FCE7F3', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '12', shapeType: 'rectangle', startX: 100, startY: 230, endX: 260, endY: 270, color: '#EC4899', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '13', text: '💖 SATURDAY', x: 130, y: 257, color: '#BE185D', fontSize: 20, layer: 0 },
+        
+        { type: 'shape' as const, id: Date.now().toString() + '14a', shapeType: 'rectangle', startX: 300, startY: 220, endX: 500, endY: 280, color: '#FCE7F3', strokeWidth: 0, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '14', shapeType: 'rectangle', startX: 320, startY: 230, endX: 480, endY: 270, color: '#EC4899', strokeWidth: 3, layer: 0 },
+        { type: 'text' as const, id: Date.now().toString() + '15', text: '☀️ SUNDAY', x: 355, y: 257, color: '#BE185D', fontSize: 20, layer: 0 },
+        
+        // Goals and Notes sections
+        { type: 'text' as const, id: Date.now().toString() + '16a', text: '🎯 WEEKLY GOALS', x: 100, y: 320, color: '#8B5CF6', fontSize: 28, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '16', text: '• Goal 1: Complete project\n• Goal 2: Exercise 3x\n• Goal 3: Read book\n• Goal 4: Team meeting', x: 100, y: 360, width: 350, height: 240, layer: 0 },
+        
+        { type: 'text' as const, id: Date.now().toString() + '17a', text: '📝 NOTES & IDEAS', x: 520, y: 320, color: '#F59E0B', fontSize: 28, layer: 0 },
+        { type: 'sticky' as const, id: Date.now().toString() + '17', text: '✨ Important reminders\n💡 New ideas\n📞 Calls to make\n✉️ Emails to send', x: 520, y: 360, width: 350, height: 240, layer: 0 },
+        
+        // Decorative stars
+        { type: 'shape' as const, id: Date.now().toString() + '18', shapeType: 'star', startX: 520, startY: 150, endX: 560, endY: 190, color: '#FBBF24', strokeWidth: 3, layer: 0 },
+        { type: 'shape' as const, id: Date.now().toString() + '19', shapeType: 'star', startX: 520, startY: 230, endX: 560, endY: 270, color: '#F472B6', strokeWidth: 3, layer: 0 },
+      ]
+    }
+  ];
+
+  const loadTemplate = (templateIndex: number) => {
+    if (window.confirm('Load this template? Current canvas will be replaced.')) {
+      const template = templates[templateIndex];
+      setElements(template.elements);
+      setHistory([template.elements]);
+      setHistoryStep(0);
+      setShowTemplateMenu(false);
     }
   };
 
@@ -751,23 +1148,26 @@ export default function Whiteboard() {
         className="hidden"
       />
 
+      {/* Enhanced Toolbar */}
       <motion.div 
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="bg-card/80 backdrop-blur-xl border-b border-border/50 shadow-lg"
+        className="bg-card/95 backdrop-blur-xl border-b border-border/50 shadow-2xl relative z-10"
       >
-        <div className="max-w-[1800px] mx-auto px-4 py-3">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-3">
+        <div className="max-w-[1920px] mx-auto px-6 py-4">
+          {/* Top Row - Title and Actions */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-4">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => navigate('/dashboard')}
-                className="p-2.5 hover:bg-gradient-to-br from-primary/20 to-primary/10 rounded-xl transition-all duration-300 group"
+                className="p-3 hover:bg-primary/10 rounded-xl transition-all duration-300 group"
                 title="Back to Dashboard"
               >
                 <Home className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
               </motion.button>
+              
               {isEditingName ? (
                 <input
                   type="text"
@@ -775,189 +1175,248 @@ export default function Whiteboard() {
                   onChange={(e) => setWhiteboardName(e.target.value)}
                   onBlur={() => setIsEditingName(false)}
                   onKeyDown={(e) => e.key === 'Enter' && setIsEditingName(false)}
-                  className="text-xl font-semibold px-2 py-1 border-2 border-primary rounded-xl focus:outline-none bg-background text-foreground"
+                  className="text-2xl font-bold px-3 py-2 border-2 border-primary rounded-xl focus:outline-none bg-background text-foreground shadow-lg"
                   autoFocus
                 />
               ) : (
                 <motion.h1
                   whileHover={{ scale: 1.02 }}
                   onClick={() => setIsEditingName(true)}
-                  className="text-xl font-bold bg-gradient-to-r from-primary via-primary/80 to-primary bg-clip-text text-transparent cursor-pointer transition-all duration-300"
+                  className="text-2xl font-bold bg-gradient-to-r from-primary via-purple-500 to-primary bg-clip-text text-transparent cursor-pointer"
                 >
                   {whiteboardName}
                 </motion.h1>
               )}
+              
               {saving && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full border border-primary/20"
+                  className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-full border border-primary/30"
                 >
                   <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-                  <span className="text-xs font-medium text-primary">Saving...</span>
+                  <span className="text-xs font-semibold text-primary">Saving...</span>
                 </motion.div>
               )}
             </div>
 
             <div className="flex items-center gap-2">
+              <div className="relative">
+                <motion.button
+                  whileHover={{ scale: 1.05, y: -2 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setShowTemplateMenu(!showTemplateMenu)}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500/20 to-teal-500/20 hover:from-green-500/30 hover:to-teal-500/30 rounded-xl transition-all duration-300 text-sm font-bold text-green-600 dark:text-green-400 border border-green-500/30 shadow-lg shadow-green-500/10"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>Templates</span>
+                </motion.button>
+
+                <AnimatePresence>
+                  {showTemplateMenu && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                      className="absolute top-full mt-2 left-0 bg-card/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-border p-4 z-50 w-96"
+                    >
+                      <h3 className="text-lg font-bold mb-4">Choose a Template</h3>
+                      <div className="space-y-2">
+                        {templates.map((template, index) => (
+                          <motion.button
+                            key={index}
+                            whileHover={{ scale: 1.02, x: 4 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => loadTemplate(index)}
+                            className="w-full p-4 bg-accent/50 hover:bg-accent rounded-xl transition-all text-left border-2 border-transparent hover:border-primary/50"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-3xl">{template.icon}</span>
+                              <div className="flex-1">
+                                <h4 className="font-bold text-sm">{template.name}</h4>
+                                <p className="text-xs text-foreground/60">{template.description}</p>
+                              </div>
+                            </div>
+                          </motion.button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setShowCollabModal(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-primary/20 to-primary/10 hover:from-primary/30 hover:to-primary/20 rounded-xl transition-all duration-300 text-sm font-semibold text-primary border border-primary/20"
-                title="Manage Collaborators"
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500/20 to-purple-500/20 hover:from-blue-500/30 hover:to-purple-500/30 rounded-xl transition-all duration-300 text-sm font-bold text-blue-600 dark:text-blue-400 border border-blue-500/30 shadow-lg shadow-blue-500/10"
               >
                 <Users className="w-4 h-4" />
-                <span className="hidden sm:inline">Collaborate</span>
+                <span>Collaborate</span>
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleDownload}
-                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 rounded-xl transition-all duration-300 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20"
-                title="Download"
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-primary to-purple-600 hover:from-primary/90 hover:to-purple-600/90 rounded-xl transition-all duration-300 text-sm font-bold text-white shadow-lg shadow-primary/30"
               >
                 <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">Export</span>
+                <span>Export</span>
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleClear}
-                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl transition-all duration-300 text-sm font-semibold text-white shadow-lg shadow-orange-500/20"
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-yellow-500/20 to-orange-500/20 hover:from-yellow-500/30 hover:to-orange-500/30 rounded-xl transition-all duration-300 text-sm font-bold text-yellow-600 dark:text-yellow-400 border border-yellow-500/30 shadow-lg shadow-yellow-500/10"
                 title="Clear Canvas"
               >
-                <Trash2 className="w-4 h-4" />
+                <Eraser className="w-4 h-4" />
+                <span>Clear</span>
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05, y: -2 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setShowDeleteConfirm(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-xl transition-all duration-300 text-sm font-semibold text-white shadow-lg shadow-red-500/20"
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-red-500/20 to-red-600/20 hover:from-red-500/30 hover:to-red-600/30 rounded-xl transition-all duration-300 text-sm font-bold text-red-600 dark:text-red-400 border border-red-500/30 shadow-lg shadow-red-500/10"
                 title="Delete Whiteboard"
               >
                 <Trash2 className="w-4 h-4" />
-                <span className="hidden sm:inline">Delete</span>
+                <span>Delete</span>
               </motion.button>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+          {/* Bottom Row - Drawing Tools */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Selection & Comments */}
             <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-xl p-1.5 shadow-lg border border-border/50"
             >
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('select')}
-                title="Select"
-                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'select' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
+                title="Select (V)"
+                className={`p-3 rounded-lg transition-all ${tool === 'select' ? 'bg-primary text-white shadow-lg shadow-primary/50 scale-105' : 'hover:bg-background/70'}`}
               >
                 <MousePointer className="w-4 h-4" />
               </motion.button>
+              
+              <AnimatePresence>
+                {selectedElement && (
+                  <motion.button
+                    initial={{ opacity: 0, scale: 0.5, width: 0 }}
+                    animate={{ opacity: 1, scale: 1, width: 'auto' }}
+                    exit={{ opacity: 0, scale: 0.5, width: 0 }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setShowCommentsPanel(!showCommentsPanel)}
+                    title="Comments"
+                    className={`p-3 rounded-lg transition-all ${showCommentsPanel ? 'bg-green-500 text-white shadow-lg shadow-green-500/50 scale-105' : 'hover:bg-background/70'}`}
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                  </motion.button>
+                )}
+              </AnimatePresence>
+            </motion.div>
+
+            {/* Drawing Tools */}
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-xl p-1.5 shadow-lg border border-border/50"
+            >
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('pen')}
-                title="Pen"
-                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'pen' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
+                title="Pen (P)"
+                className={`p-3 rounded-lg transition-all ${tool === 'pen' ? 'bg-primary text-white shadow-lg shadow-primary/50 scale-105' : 'hover:bg-background/70'}`}
               >
                 <Pen className="w-4 h-4" />
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('eraser')}
-                title="Eraser"
-                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'eraser' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
+                title="Eraser (E)"
+                className={`p-3 rounded-lg transition-all ${tool === 'eraser' ? 'bg-primary text-white shadow-lg shadow-primary/50 scale-105' : 'hover:bg-background/70'}`}
               >
                 <Eraser className="w-4 h-4" />
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('text')}
-                title="Text"
-                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'text' ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
+                title="Text (T)"
+                className={`p-3 rounded-lg transition-all ${tool === 'text' ? 'bg-primary text-white shadow-lg shadow-primary/50 scale-105' : 'hover:bg-background/70'}`}
               >
                 <Type className="w-4 h-4" />
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setTool('sticky')}
-                title="Sticky Note"
-                className={`p-2.5 rounded-xl transition-all duration-300 ${tool === 'sticky' ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-500/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
+                title="Sticky Note (S)"
+                className={`p-3 rounded-lg transition-all ${tool === 'sticky' ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-500/50 scale-105' : 'hover:bg-background/70'}`}
               >
                 <FileText className="w-4 h-4" />
               </motion.button>
+              
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => fileInputRef.current?.click()}
+                title="Add Image (I)"
+                className="p-3 rounded-lg transition-all hover:bg-background/70"
+              >
+                <ImageIcon className="w-4 h-4" />
+              </motion.button>
             </motion.div>
 
+            {/* Shapes */}
             <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.15 }}
-              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+              transition={{ delay: 0.1 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-xl p-1.5 shadow-lg border border-border/50"
             >
-              {SHAPES.slice(0, 4).map(({ tool: shapeTool, icon: Icon, label }) => (
+              {SHAPES.map(({ tool: shapeTool, icon: Icon, label }) => (
                 <motion.button
                   key={shapeTool}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setTool(shapeTool)}
                   title={label}
-                  className={`p-2.5 rounded-xl transition-all duration-300 ${tool === shapeTool ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
+                  className={`p-3 rounded-lg transition-all ${tool === shapeTool ? 'bg-primary text-white shadow-lg shadow-primary/50 scale-105' : 'hover:bg-background/70'}`}
                 >
                   <Icon className="w-4 h-4" />
                 </motion.button>
               ))}
             </motion.div>
 
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
-            >
-              {SHAPES.slice(4).map(({ tool: shapeTool, icon: Icon, label }) => (
-                <motion.button
-                  key={shapeTool}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setTool(shapeTool)}
-                  title={label}
-                  className={`p-2.5 rounded-xl transition-all duration-300 ${tool === shapeTool ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30 scale-105' : 'text-foreground/60 hover:bg-background/70 hover:scale-105'}`}
-                >
-                  <Icon className="w-4 h-4" />
-                </motion.button>
-              ))}
-            </motion.div>
+            <div className="h-8 w-px bg-border" />
 
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => fileInputRef.current?.click()}
-              title="Add Image"
-              className={`p-2.5 rounded-xl transition-all duration-300 bg-accent/50 hover:bg-accent/70 ${tool === 'image' ? 'ring-2 ring-primary shadow-lg shadow-primary/30' : ''}`}
-            >
-              <ImageIcon className="w-4 h-4 text-foreground/70" />
-            </motion.button>
-
-            <div className="h-8 w-px bg-border/50" />
-
+            {/* Color Picker */}
             <div className="relative">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setShowColorPicker(!showColorPicker)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-accent/50 hover:bg-accent/70 rounded-xl transition-all duration-300 shadow-md hover:shadow-lg hover:scale-105"
-                title="Color Picker"
+                className="flex items-center gap-3 px-4 py-3 bg-accent/50 hover:bg-accent/70 rounded-xl transition-all shadow-lg border border-border/50"
               >
-                <div className="w-6 h-6 rounded-lg border-2 border-border shadow-sm" style={{ backgroundColor: color }} />
-                <ChevronDown className="w-4 h-4 text-foreground/60" />
+                <div className="w-6 h-6 rounded-lg border-2 border-white shadow-md" style={{ backgroundColor: color }} />
+                <span className="text-sm font-semibold">Color</span>
+                <ChevronDown className="w-4 h-4" />
               </motion.button>
 
               <AnimatePresence>
@@ -966,53 +1425,50 @@ export default function Whiteboard() {
                     initial={{ opacity: 0, y: -10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                    className="absolute top-full mt-2 left-0 bg-card/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-border/50 p-5 z-50 w-72"
+                    className="absolute top-full mt-2 left-0 bg-card/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-border p-6 z-50 w-80"
                   >
-                    <div className="mb-3">
-                      <label className="block text-xs font-semibold text-foreground/80 mb-2">Preset Colors</label>
-                      <div className="grid grid-cols-6 gap-2">
-                        {PRESET_COLORS.map(col => (
-                          <button
-                            key={col}
-                            className={`w-10 h-10 rounded-xl border-2 transition-all duration-300 hover:scale-125 hover:rotate-6 ${color === col ? 'border-primary ring-4 ring-primary/50 scale-110' : 'border-border/50 hover:border-primary/50'}`}
-                            style={{ backgroundColor: col }}
-                            onClick={() => {
-                              handleColorChange(col);
-                              setShowColorPicker(false);
-                            }}
-                            title={col}
-                          />
-                        ))}
-                      </div>
+                    <h3 className="text-sm font-bold mb-3">Preset Colors</h3>
+                    <div className="grid grid-cols-6 gap-2 mb-4">
+                      {PRESET_COLORS.map(col => (
+                        <motion.button
+                          key={col}
+                          whileHover={{ scale: 1.15, rotate: 5 }}
+                          whileTap={{ scale: 0.95 }}
+                          className={`w-10 h-10 rounded-xl border-2 transition-all ${color === col ? 'border-primary ring-4 ring-primary/30 scale-110' : 'border-border/50'}`}
+                          style={{ backgroundColor: col }}
+                          onClick={() => {
+                            handleColorChange(col);
+                            setShowColorPicker(false);
+                          }}
+                        />
+                      ))}
                     </div>
-
-                    <div className="border-t border-border pt-3">
-                      <label className="block text-xs font-semibold text-foreground/80 mb-2">Custom Color</label>
+                    
+                    <div className="border-t border-border pt-4">
+                      <h3 className="text-sm font-bold mb-3">Custom Color</h3>
                       <div className="flex gap-2">
                         <input
                           type="color"
                           value={customColor}
                           onChange={(e) => setCustomColor(e.target.value)}
-                          className="w-12 h-12 rounded-xl cursor-pointer border-2 border-border"
+                          className="w-14 h-12 rounded-xl cursor-pointer border-2 border-border"
                         />
                         <input
                           type="text"
                           value={customColor}
                           onChange={(e) => {
-                            const val = e.target.value;
-                            if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
-                              setCustomColor(val);
+                            if (/^#[0-9A-Fa-f]{0,6}$/.test(e.target.value)) {
+                              setCustomColor(e.target.value);
                             }
                           }}
-                          placeholder="#000000"
-                          className="flex-1 px-3 py-2 border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none text-sm bg-background text-foreground"
+                          className="flex-1 px-3 py-2 border border-border rounded-xl focus:ring-2 focus:ring-primary outline-none bg-background"
                         />
                         <button
                           onClick={() => {
                             handleColorChange(customColor);
                             setShowColorPicker(false);
                           }}
-                          className="px-4 py-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg shadow-primary/30 hover:scale-105"
+                          className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl font-bold transition shadow-lg"
                         >
                           Apply
                         </button>
@@ -1023,19 +1479,17 @@ export default function Whiteboard() {
               </AnimatePresence>
             </div>
 
+            {/* Stroke Width */}
             <div className="relative">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setShowStrokeMenu(!showStrokeMenu)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-accent/50 hover:bg-accent/70 rounded-xl transition-all duration-300 shadow-md hover:shadow-lg hover:scale-105"
-                title="Stroke Width"
+                className="flex items-center gap-3 px-4 py-3 bg-accent/50 hover:bg-accent/70 rounded-xl transition-all shadow-lg border border-border/50"
               >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-1 rounded-full bg-foreground/80" style={{ height: `${strokeWidth}px` }} />
-                  <span className="text-sm font-medium text-foreground/80">{strokeWidth}px</span>
-                </div>
-                <ChevronDown className="w-4 h-4 text-foreground/60" />
+                <div className="w-6 h-1 rounded-full bg-foreground" style={{ height: `${strokeWidth}px` }} />
+                <span className="text-sm font-semibold">{strokeWidth}px</span>
+                <ChevronDown className="w-4 h-4" />
               </motion.button>
 
               <AnimatePresence>
@@ -1044,18 +1498,18 @@ export default function Whiteboard() {
                     initial={{ opacity: 0, y: -10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                    className="absolute top-full mt-2 left-0 bg-card/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-border/50 p-5 z-50 w-64"
+                    className="absolute top-full mt-2 left-0 bg-card/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-border p-6 z-50 w-72"
                   >
-                    <label className="block text-xs font-semibold text-foreground/80 mb-3">Stroke Width</label>
+                    <h3 className="text-sm font-bold mb-3">Stroke Width</h3>
                     <input
                       type="range"
                       min="1"
                       max="50"
                       value={strokeWidth}
                       onChange={(e) => setStrokeWidth(Number(e.target.value))}
-                      className="w-full accent-primary"
+                      className="w-full accent-primary mb-4"
                     />
-                    <div className="flex items-center justify-between gap-2 mt-3">
+                    <div className="flex gap-2">
                       {[1, 3, 5, 10, 20].map(size => (
                         <button
                           key={size}
@@ -1063,10 +1517,10 @@ export default function Whiteboard() {
                             setStrokeWidth(size);
                             setShowStrokeMenu(false);
                           }}
-                          className={`flex-1 py-2 rounded-xl border-2 transition-all duration-300 ${strokeWidth === size ? 'border-primary bg-primary/10 scale-105 shadow-lg shadow-primary/20' : 'border-border/50 hover:border-primary/50 hover:scale-105'}`}
+                          className={`flex-1 py-3 rounded-xl border-2 transition-all ${strokeWidth === size ? 'border-primary bg-primary/10 scale-105' : 'border-border/50 hover:border-primary/50'}`}
                         >
                           <div className="w-full flex justify-center">
-                            <div className="rounded-full bg-foreground/80" style={{ width: `${size * 2}px`, height: `${size}px` }} />
+                            <div className="rounded-full bg-foreground" style={{ width: `${size * 2}px`, height: `${size}px` }} />
                           </div>
                         </button>
                       ))}
@@ -1076,56 +1530,158 @@ export default function Whiteboard() {
               </AnimatePresence>
             </div>
 
-            <div className="h-8 w-px bg-border/50" />
+            <div className="h-8 w-px bg-border" />
 
+            {/* History Controls */}
             <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.25 }}
-              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-2xl p-1.5 shadow-md border border-border/30"
+              transition={{ delay: 0.15 }}
+              className="flex items-center gap-1 bg-accent/50 backdrop-blur-sm rounded-xl p-1.5 shadow-lg border border-border/50"
             >
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleUndo}
                 disabled={historyStep === 0}
-                title="Undo"
-                className="p-2.5 rounded-xl transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed text-foreground/60 hover:bg-background/70 hover:text-primary hover:scale-105"
+                title="Undo (Ctrl+Z)"
+                className="p-3 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:bg-background/70"
               >
                 <Undo className="w-4 h-4" />
               </motion.button>
+              
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={handleRedo}
                 disabled={historyStep >= history.length - 1}
-                title="Redo"
-                className="p-2.5 rounded-xl transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed text-foreground/60 hover:bg-background/70 hover:text-primary hover:scale-105"
+                title="Redo (Ctrl+Y)"
+                className="p-3 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:bg-background/70"
               >
                 <Redo className="w-4 h-4" />
               </motion.button>
             </motion.div>
 
+            {/* Fullscreen */}
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={handleFullscreen}
-              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-              className={`p-2.5 rounded-xl transition-all duration-300 ${isFullscreen ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/30' : 'bg-accent/50 hover:bg-accent/70 text-foreground/70'}`}
+              title={isFullscreen ? 'Exit Fullscreen (F11)' : 'Fullscreen (F11)'}
+              className={`p-3 rounded-xl transition-all shadow-lg ${isFullscreen ? 'bg-primary text-white shadow-primary/50' : 'bg-accent/50 hover:bg-accent/70 border border-border/50'}`}
             >
               <Maximize2 className="w-4 h-4" />
             </motion.button>
+
+            <div className="h-8 w-px bg-border" />
+
+            {/* Layers Panel */}
+            <div className="relative">
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowLayerMenu(!showLayerMenu)}
+                className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-purple-500/20 to-pink-500/20 hover:from-purple-500/30 hover:to-pink-500/30 rounded-xl transition-all shadow-lg border border-purple-500/30"
+              >
+                <div className="flex flex-col items-start">
+                  <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">Layer</span>
+                  <span className="text-sm font-bold">{layers[currentLayer]}</span>
+                </div>
+                <ChevronDown className="w-4 h-4" />
+              </motion.button>
+
+              <AnimatePresence>
+                {showLayerMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                    className="absolute top-full mt-2 right-0 bg-card/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-border p-4 z-50 w-80"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-bold">Layers</h3>
+                      <button
+                        onClick={addLayer}
+                        className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-white rounded-lg text-xs font-bold transition"
+                      >
+                        + New Layer
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {layers.map((layer, index) => (
+                        <div
+                          key={index}
+                          className={`p-3 rounded-xl border-2 transition-all ${
+                            currentLayer === index
+                              ? 'border-primary bg-primary/10 shadow-lg'
+                              : 'border-border/50 hover:border-primary/50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <input
+                              type="text"
+                              value={layer}
+                              onChange={(e) => renameLayer(index, e.target.value)}
+                              className="flex-1 px-2 py-1 bg-transparent border-none outline-none font-semibold text-sm"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => setCurrentLayer(index)}
+                                className={`px-2 py-1 rounded text-xs font-bold transition ${
+                                  currentLayer === index
+                                    ? 'bg-primary text-white'
+                                    : 'bg-accent hover:bg-accent/70'
+                                }`}
+                              >
+                                {currentLayer === index ? 'Active' : 'View'}
+                              </button>
+                              {layers.length > 1 && (
+                                <button
+                                  onClick={() => deleteLayer(index)}
+                                  className="p-1 hover:bg-red-500/20 text-red-500 rounded transition"
+                                  title="Delete Layer"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => moveLayerUp(index)}
+                              disabled={index === 0}
+                              className="flex-1 px-2 py-1 bg-accent hover:bg-accent/70 disabled:opacity-30 disabled:cursor-not-allowed rounded text-xs font-semibold transition"
+                              title="Move Up"
+                            >
+                              ↑ Up
+                            </button>
+                            <button
+                              onClick={() => moveLayerDown(index)}
+                              disabled={index === layers.length - 1}
+                              className="flex-1 px-2 py-1 bg-accent hover:bg-accent/70 disabled:opacity-30 disabled:cursor-not-allowed rounded text-xs font-semibold transition"
+                              title="Move Down"
+                            >
+                              ↓ Down
+                            </button>
+                            <span className="text-xs text-foreground/50">
+                              {elements.filter(el => (el.layer || 0) === index).length} items
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </motion.div>
 
-      <motion.div 
-        ref={containerRef}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.2 }}
-        className="flex-1 relative overflow-hidden bg-gradient-to-br from-background via-background to-background/95"
-      >
+      <div ref={containerRef} className="flex-1 w-full relative overflow-hidden bg-grid">
         <canvas
           ref={canvasRef}
           width={1920}
@@ -1133,13 +1689,73 @@ export default function Whiteboard() {
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          className="absolute inset-0 m-auto cursor-crosshair"
-          style={{ maxWidth: '100%', maxHeight: '100%' }}
+          className="w-full h-full"
         />
-      </motion.div>
+        
+        {/* Comments Panel */}
+        <AnimatePresence>
+          {showCommentsPanel && selectedElement && (
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              className="absolute top-0 right-0 h-full w-96 bg-card border-l border-border shadow-2xl flex flex-col z-10"
+            >
+              <div className="p-4 border-b border-border flex items-center justify-between flex-shrink-0">
+                <h2 className="font-bold text-lg">Comments</h2>
+                <button onClick={() => setShowCommentsPanel(false)} className="p-1 hover:bg-accent rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
 
-      {/* Collaboration Modal */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {comments.length === 0 ? (
+                  <div className="text-center text-secondary-foreground py-10">
+                    <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>No comments yet.</p>
+                    <p className="text-sm">Be the first to comment!</p>
+                  </div>
+                ) : (
+                  comments.map(comment => (
+                    <div key={comment.id} className="flex items-start gap-3">
+                      <img 
+                        src={comment.profiles?.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${comment.profiles?.username || '?'}`}
+                        alt={comment.profiles?.username || 'user'}
+                        className="w-8 h-8 rounded-full bg-accent"
+                      />
+                      <div className="flex-1 bg-accent/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-semibold text-sm">{comment.profiles?.username || 'Anonymous'}</span>
+                          <span className="text-xs text-secondary-foreground/70">{new Date(comment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <p className="text-sm">{comment.comment_text}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="p-4 border-t border-border flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && addComment()}
+                    placeholder="Add a comment..."
+                    className="flex-1 px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-background"
+                  />
+                  <button onClick={addComment} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition">
+                    Post
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       <AnimatePresence>
         {showCollabModal && (
           <motion.div
@@ -1160,81 +1776,44 @@ export default function Whiteboard() {
                 <h2 className="text-2xl font-bold text-foreground">Manage Collaborators</h2>
                 <button
                   onClick={() => setShowCollabModal(false)}
-                  className="p-2 hover:bg-accent rounded-lg transition-colors"
+                  className="p-1.5 hover:bg-accent rounded-full transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-foreground/80 mb-2">
-                    Add Collaborator by Email
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="email"
-                      value={collaboratorEmail}
-                      onChange={(e) => setCollaboratorEmail(e.target.value)}
-                      placeholder="user@example.com"
-                      className="flex-1 px-4 py-2 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none text-foreground"
-                    />
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={addCollaborator}
-                      className="px-4 py-2 bg-primary text-primary-foreground rounded-xl font-semibold hover:bg-primary/90 transition-colors flex items-center gap-2"
+              <div className="space-y-2 max-h-60 overflow-y-auto mb-4">
+                {collaborators.length === 0 ? (
+                  <p className="text-sm text-foreground/50 text-center py-4">No collaborators yet</p>
+                ) : (
+                  collaborators.map((collab: any) => (
+                    <div
+                      key={collab.user_id}
+                      className="flex items-center justify-between p-3 bg-accent/50 rounded-xl"
                     >
-                      <UserPlus className="w-4 h-4" />
-                      Add
-                    </motion.button>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-sm font-medium text-foreground/80 mb-2">Current Collaborators</h3>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {collaborators.length === 0 ? (
-                      <p className="text-sm text-foreground/50 text-center py-4">No collaborators yet</p>
-                    ) : (
-                      collaborators.map((collab: any) => (
-                        <div
-                          key={collab.user_id}
-                          className="flex items-center justify-between p-3 bg-accent/50 rounded-xl"
-                        >
-                          <div className="flex items-center gap-2">
-                            {collab.profiles?.avatar_url && (
-                              <img 
-                                src={collab.profiles.avatar_url} 
-                                alt="Avatar" 
-                                className="w-8 h-8 rounded-full"
-                              />
-                            )}
-                            <div>
-                              <p className="font-medium text-foreground">
-                                {collab.profiles?.full_name || collab.profiles?.username || 'Unknown User'}
-                              </p>
-                              <p className="text-sm text-foreground/60">@{collab.profiles?.username || 'no-username'}</p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => removeCollaborator(collab.user_id)}
-                            className="p-2 hover:bg-red-500/20 text-red-500 rounded-lg transition-colors"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
+                      <div className="flex items-center gap-3">
+                        <img src={collab.profiles?.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${collab.profiles?.username || '?'}`} alt={collab.profiles?.username} className="w-8 h-8 rounded-full" />
+                        <span className="font-semibold text-sm">{collab.profiles?.username || '...'}</span>
+                      </div>
+                      <button onClick={() => removeCollaborator(collab.user_id)} className="text-red-500 hover:text-red-600 font-semibold text-sm">Remove</button>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={collaboratorEmail}
+                  onChange={(e) => setCollaboratorEmail(e.target.value)}
+                  placeholder="Enter username..."
+                  className="flex-1 px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all bg-background"
+                />
+                <button onClick={addCollaborator} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition">Add</button>
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {showDeleteConfirm && (
           <motion.div
@@ -1249,29 +1828,13 @@ export default function Whiteboard() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-card border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl"
+              className="bg-card border border-border rounded-2xl p-6 max-w-sm w-full shadow-2xl"
             >
-              <h2 className="text-2xl font-bold text-foreground mb-4">Delete Whiteboard?</h2>
-              <p className="text-foreground/70 mb-6">
-                Are you sure you want to delete "{whiteboardName}"? This action cannot be undone.
-              </p>
-              <div className="flex gap-3">
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="flex-1 px-4 py-2.5 bg-accent hover:bg-accent/80 text-foreground rounded-xl font-semibold transition-colors"
-                >
-                  Cancel
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={deleteWhiteboard}
-                  className="flex-1 px-4 py-2.5 bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-xl font-semibold transition-colors shadow-lg shadow-red-500/20"
-                >
-                  Delete
-                </motion.button>
+              <h2 className="text-xl font-bold text-foreground mb-2">Delete Whiteboard</h2>
+              <p className="text-secondary-foreground mb-6">Are you sure you want to delete "{whiteboardName}"? This action cannot be undone.</p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setShowDeleteConfirm(false)} className="px-4 py-2 bg-accent hover:bg-accent/80 rounded-lg font-semibold transition">Cancel</button>
+                <button onClick={deleteWhiteboard} className="px-4 py-2 bg-red-500 text-white hover:bg-red-600 rounded-lg font-semibold transition">Delete</button>
               </div>
             </motion.div>
           </motion.div>
